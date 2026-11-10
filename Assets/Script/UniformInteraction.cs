@@ -5,6 +5,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 #endif
 
+[DefaultExecutionOrder(-100)]
 public class UniformInteraction : MonoBehaviour
 {
     public Camera playerCamera;
@@ -14,6 +15,7 @@ public class UniformInteraction : MonoBehaviour
     public Transform beerStageSpawn;
 
     public float interactDistance = 2.5f;
+    // 기존 Inspector 직렬화 호환용. 진행 대기는 실제 음성 종료를 사용합니다.
     public float shiftMessageDuration = 3f;
 
     public AudioClip afterShirtVoice;
@@ -26,6 +28,19 @@ public class UniformInteraction : MonoBehaviour
     public bool ApronWorn { get; private set; }
     public bool IsFullyDressed => ShirtWorn && ApronWorn;
     public bool ShiftStarted => shiftStarted;
+    public bool ShiftCompleted { get; private set; }
+    public bool IsGuidePlaying => showingShiftMessage || guidePlaybackFrame == Time.frameCount
+        || (clothingVoiceSource != null && clothingVoiceSource.isActiveAndEnabled && clothingVoiceSource.isPlaying)
+        || (entranceVoiceSource != null && entranceVoiceSource.isActiveAndEnabled && entranceVoiceSource.isPlaying)
+        || (entranceGuide != null && entranceGuide.IsPlaying);
+
+    private EntranceGuide entranceGuide;
+    private int guidePlaybackFrame = -1;
+
+    public void RegisterEntranceGuide(EntranceGuide guide)
+    {
+        entranceGuide = guide;
+    }
 
     private bool shiftStarted;
     private bool showingShiftMessage;
@@ -61,7 +76,7 @@ public class UniformInteraction : MonoBehaviour
     {
         prompt = "";
 
-        if (showingShiftMessage)
+        if (IsGuidePlaying)
             return;
 
         if (Cursor.lockState != CursorLockMode.Locked)
@@ -83,16 +98,19 @@ public class UniformInteraction : MonoBehaviour
 
         if (!ShirtWorn && target.IsChildOf(shirt.transform))
         {
-            if (GuideIsPlaying())
-            {
-                prompt = "Listen to the instruction...";
-                return;
-            }
-
             prompt = "E - Put on shirt";
 
             if (PressedInteract())
             {
+                if (entranceGuide != null)
+                    entranceGuide.TryPlayInstruction();
+
+                if (IsGuidePlaying)
+                {
+                    prompt = "";
+                    return;
+                }
+
                 ShirtWorn = true;
                 shirt.SetActive(false);
                 prompt = "";
@@ -107,12 +125,6 @@ public class UniformInteraction : MonoBehaviour
             if (!ShirtWorn)
             {
                 prompt = "Put on your shirt first.";
-                return;
-            }
-
-            if (GuideIsPlaying())
-            {
-                prompt = "Listen to the instruction...";
                 return;
             }
 
@@ -137,12 +149,6 @@ public class UniformInteraction : MonoBehaviour
 
         if (IsFullyDressed && !shiftStarted && clockGuide != null && target.IsChildOf(clockGuide.transform))
         {
-            if (GuideIsPlaying())
-            {
-                prompt = "Listen to the instruction...";
-                return;
-            }
-
             prompt = "E - Start shift";
 
             if (PressedInteract())
@@ -164,11 +170,7 @@ public class UniformInteraction : MonoBehaviour
         if (movement != null)
             movement.enabled = false;
 
-        if (shiftStartVoice != null)
-        {
-            clothingVoiceSource.clip = shiftStartVoice;
-            clothingVoiceSource.Play();
-        }
+        PlayGuide(shiftStartVoice, subtitle);
 
         if (beerStageSpawn != null)
         {
@@ -191,9 +193,17 @@ public class UniformInteraction : MonoBehaviour
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
 
-        yield return new WaitForSeconds(shiftMessageDuration);
+        // Play 직후의 프레임을 넘긴 뒤 실제 재생 종료를 기다립니다.
+        // 클립/소스가 없거나 재생할 수 없다면 다음 프레임에 진행합니다.
+        yield return null;
+        while (clothingVoiceSource != null && clothingVoiceSource.isActiveAndEnabled
+            && clothingVoiceSource.isPlaying)
+        {
+            yield return null;
+        }
 
         showingShiftMessage = false;
+        ShiftCompleted = true;
 
         if (movement != null)
             movement.enabled = true;
@@ -233,22 +243,17 @@ public class UniformInteraction : MonoBehaviour
             clockCollider.enabled = false;
     }
 
-    bool GuideIsPlaying()
-    {
-        return (clothingVoiceSource != null && clothingVoiceSource.isPlaying)
-            || (entranceVoiceSource != null && entranceVoiceSource.isPlaying);
-    }
-
     void PlayGuide(AudioClip clip, string text)
     {
         subtitle = text;
 
-        if (clip == null)
+        if (clip == null || clothingVoiceSource == null || !clothingVoiceSource.isActiveAndEnabled)
         {
             Debug.LogWarning("안내 음성 파일이 연결되지 않았습니다.");
             return;
         }
 
+        guidePlaybackFrame = Time.frameCount;
         clothingVoiceSource.clip = clip;
         clothingVoiceSource.Play();
     }

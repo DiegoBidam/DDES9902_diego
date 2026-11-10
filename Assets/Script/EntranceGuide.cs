@@ -1,5 +1,7 @@
 using UnityEngine;
 
+// 입구 안내 → 착용 처리 → 이동 입력 순서로 같은 프레임의 중복 입력을 막습니다.
+[DefaultExecutionOrder(-200)]
 [RequireComponent(typeof(BoxCollider))]
 [RequireComponent(typeof(AudioSource))]
 public class EntranceGuide : MonoBehaviour
@@ -10,6 +12,11 @@ public class EntranceGuide : MonoBehaviour
     private BoxCollider entranceZone;
     private AudioSource voiceSource;
     private bool hasPlayed;
+    private int playbackFrame = -1;
+    private UniformInteraction uniform;
+
+    public bool IsPlaying => playbackFrame == Time.frameCount
+        || (voiceSource != null && voiceSource.isActiveAndEnabled && voiceSource.isPlaying);
     private GUIStyle subtitleStyle;
 
     void Awake()
@@ -22,14 +29,21 @@ public class EntranceGuide : MonoBehaviour
         voiceSource.loop = false;
         voiceSource.spatialBlend = 0f;
         voiceSource.Stop();
+
+        if (player != null)
+        {
+            uniform = player.GetComponent<UniformInteraction>();
+            if (uniform != null)
+                uniform.RegisterEntranceGuide(this);
+        }
     }
 
     void Start()
     {
-        if (player == null || shirtInstruction == null)
+        if (player == null)
         {
             Debug.LogError(
-                "EntranceGuide: Player와 Shirt Instruction을 연결하세요."
+                "EntranceGuide: Player를 연결하세요."
             );
             enabled = false;
         }
@@ -45,10 +59,35 @@ public class EntranceGuide : MonoBehaviour
 
         if (entranceZone.bounds.Contains(checkPoint))
         {
-            hasPlayed = true;
-            voiceSource.clip = shirtInstruction;
-            voiceSource.Play();
+            TryPlayInstruction();
         }
+    }
+
+    // 셔츠를 먼저 조준해도 입구 안내를 선행하고, 늦은 입구 재생은 막습니다.
+    public void TryPlayInstruction()
+    {
+        if (hasPlayed || !isActiveAndEnabled)
+            return;
+
+        if (uniform != null)
+        {
+            if (uniform.ShirtWorn)
+            {
+                hasPlayed = true;
+                return;
+            }
+
+            if (!uniform.isActiveAndEnabled || uniform.IsGuidePlaying)
+                return;
+        }
+
+        hasPlayed = true;
+        if (shirtInstruction == null || voiceSource == null || !voiceSource.isActiveAndEnabled)
+            return;
+
+        playbackFrame = Time.frameCount;
+        voiceSource.clip = shirtInstruction;
+        voiceSource.Play();
     }
 
     void OnGUI()

@@ -26,6 +26,7 @@ public class BeerGlassPour : MonoBehaviour
     public Vector3 holdLocalPosition = new Vector3(0.32f, -0.28f, 1.25f);
     public Vector3 heldGlassLocalRotation = new Vector3(0f, 0f, 0f);
 
+    private UniformInteraction uniform;
     private Transform holdPoint;
     private GameObject heldGlass;
 
@@ -43,6 +44,7 @@ public class BeerGlassPour : MonoBehaviour
 
     void Start()
     {
+        uniform = GetComponent<UniformInteraction>();
         if (playerCamera == null)
             playerCamera = GetComponentInChildren<Camera>();
 
@@ -68,6 +70,10 @@ public class BeerGlassPour : MonoBehaviour
     void Update()
     {
         prompt = "";
+
+        if (uniform == null || !uniform.isActiveAndEnabled
+            || !uniform.ShiftCompleted || uniform.IsGuidePlaying)
+            return;
 
         if (Cursor.lockState != CursorLockMode.Locked)
             return;

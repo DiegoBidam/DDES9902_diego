@@ -43,13 +43,16 @@ public class BarIntro : MonoBehaviour
     {
         started = true;
 
-        voiceSource.clip = welcomeVoice;
-        voiceSource.Play();
+        if (welcomeVoice != null && voiceSource.isActiveAndEnabled)
+        {
+            voiceSource.clip = welcomeVoice;
+            voiceSource.Play();
+        }
 
         // 재생이 시작된 다음 종료될 때까지 기다립니다.
         yield return null;
 
-        while (voiceSource.isPlaying)
+        while (voiceSource.isActiveAndEnabled && voiceSource.isPlaying)
             yield return null;
 
         finished = true;
@@ -89,16 +92,6 @@ public class BarIntro : MonoBehaviour
                 "Your first shift",
                 messageStyle
             );
-
-            if (welcomeVoice == null)
-            {
-                GUI.Label(
-                    new Rect(left + 10, top + 70, width - 20, 70),
-                    "Assign the Welcome Voice clip in the Inspector.",
-                    messageStyle
-                );
-                return;
-            }
 
             if (GUI.Button(
                 new Rect(Screen.width / 2f - 100, top + 85, 200, 50),
