@@ -41,6 +41,7 @@ public class BeerGlassPour : MonoBehaviour
     private readonly bool[] filled = new bool[2];
     private readonly bool[] served = new bool[2];
     private GameObject serviceMarker;
+    private BoxCollider serviceDesk;
     private readonly LineRenderer[] serviceRings = new LineRenderer[2];
     private Material markerMaterial;
     private Material completedMaterial;
@@ -132,7 +133,8 @@ public class BeerGlassPour : MonoBehaviour
     {
         Ray ray = playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
 
-        if (!Physics.Raycast(ray, out RaycastHit hit, pickupDistance))
+        if (!Physics.Raycast(ray, out RaycastHit hit, pickupDistance,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
             return;
 
         Transform target = hit.collider.transform;
@@ -366,9 +368,17 @@ public class BeerGlassPour : MonoBehaviour
             return false;
 
         Ray ray = playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
-        return Physics.Raycast(ray, out RaycastHit hit, pickupDistance,
-            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide)
-            && hit.transform.IsChildOf(serviceMarker.transform);
+        if (!Physics.Raycast(ray, out RaycastHit hit, pickupDistance,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide))
+            return false;
+
+        if (hit.transform.IsChildOf(serviceMarker.transform))
+            return true;
+
+        // 링뿐 아니라 링이 놓인 상판을 눌러도 서빙합니다.
+        Vector3 offset = hit.point - serviceMarker.transform.position;
+        return hit.collider == serviceDesk && Mathf.Abs(offset.x) <= 0.85f
+            && Mathf.Abs(offset.z) <= 0.6f && Mathf.Abs(offset.y) <= 0.2f;
     }
 
     void ServeGlass(int index)
@@ -417,6 +427,7 @@ public class BeerGlassPour : MonoBehaviour
             return;
         }
 
+        serviceDesk = desk;
         Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
         if (shader == null) shader = Shader.Find("Unlit/Color");
         markerMaterial = new Material(shader) { color = new Color(0.1f, 0.85f, 1f) };
@@ -429,6 +440,16 @@ public class BeerGlassPour : MonoBehaviour
         UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(serviceMarker, gameObject.scene);
         serviceMarker.transform.position = desk.transform.TransformPoint(desk.center
             + new Vector3(0f, desk.size.y * 0.5f, -desk.size.z * 0.25f)) + Vector3.up * 0.02f;
+        // 탭 옆에서 다음 목표를 바로 볼 수 있도록 표식을 가까이 둡니다.
+        if (beerNozzle != null)
+        {
+            float left = desk.transform.TransformPoint(desk.center - Vector3.right * desk.size.x * 0.5f).x;
+            float right = desk.transform.TransformPoint(desk.center + Vector3.right * desk.size.x * 0.5f).x;
+            Vector3 position = serviceMarker.transform.position;
+            position.x = Mathf.Clamp(beerNozzle.position.x - 1f, Mathf.Min(left, right) + 0.8f,
+                Mathf.Max(left, right) - 0.8f);
+            serviceMarker.transform.position = position;
+        }
         BoxCollider zone = serviceMarker.AddComponent<BoxCollider>();
         zone.isTrigger = true;
         zone.center = new Vector3(0f, 0.18f, 0f);
@@ -539,13 +560,45 @@ public class BeerGlassPour : MonoBehaviour
             ? "TASK COMPLETE!\nBoth beers served."
             : "SERVE TWO BEERS  " + count + "/2\nSchooner: " + GlassStatus(0) + "   Pint: " + GlassStatus(1), textStyle);
 
+        string instruction;
+        if (TaskCompleted)
+            instruction = "TASK COMPLETE! Both beers served.";
+        else if (pouring)
+            instruction = "2. POURING BEER...";
+        else if (heldGlass == null)
+            instruction = "1. Pick up a glass with LEFT CLICK";
+        else if (!filled[HeldGlassIndex()])
+            instruction = "2. Aim at the beer tap and press E to fill the glass";
+        else
+            instruction = "3. BEER READY! Aim at the glowing SERVE spot and LEFT CLICK to place";
+
+        float panelWidth = Mathf.Min(650f, Screen.width - 30f);
+        Rect instructionArea = new Rect((Screen.width - panelWidth) * 0.5f, 130f, panelWidth, 85f);
+        GUI.Box(instructionArea, "");
+        GUI.Label(instructionArea, "PICK UP > POUR > SERVE\n" + instruction, textStyle);
+
         if (serviceMarker != null && serviceMarker.activeInHierarchy)
         {
             Vector3 screen = playerCamera.WorldToScreenPoint(serviceMarker.transform.position + Vector3.up * 0.5f);
-            if (screen.z > 0f && screen.z < 12f)
+            bool readyToServe = heldGlass != null && filled[HeldGlassIndex()] && !pouring;
+            bool onScreen = screen.z > 0f && screen.x >= 0f && screen.x <= Screen.width
+                && screen.y >= 0f && screen.y <= Screen.height;
+            if (onScreen || readyToServe)
             {
-                GUI.Label(new Rect(screen.x - 150f, Screen.height - screen.y - 25f, 300f, 55f),
-                    TaskCompleted ? "SERVING COMPLETE" : "SERVE HERE  " + count + "/2", textStyle);
+                if (screen.z < 0f)
+                {
+                    screen.x = Screen.width - screen.x;
+                    screen.y = Screen.height - screen.y;
+                }
+                float labelX = Mathf.Clamp(screen.x - 150f, 5f, Mathf.Max(5f, Screen.width - 305f));
+                float labelY = Mathf.Clamp(Screen.height - screen.y - 25f, 225f,
+                    Mathf.Max(225f, Screen.height - 90f));
+                Rect markerArea = new Rect(labelX, labelY, 300f, 65f);
+                GUI.Box(markerArea, "");
+                GUI.Label(markerArea, TaskCompleted ? "SERVING COMPLETE"
+                    : !onScreen ? "TURN TOWARD SERVE"
+                    : readyToServe ? "SERVE HERE\nAim here + LEFT CLICK"
+                    : "SERVE HERE  " + count + "/2", textStyle);
             }
         }
 
