@@ -949,7 +949,8 @@ public class BeerGlassPour : MonoBehaviour
         private bool savedMovement, savedUniform, savedCamera;
         private CursorLockMode savedCursor;
         private bool savedCursorVisible;
-        private Material steel, glass, ice, liquid, mat, white;
+        private Material steel, glass, ice, liquid, mat, white, labelPaper, spoonMetal;
+        private Font labelFont;
         private Phase phase;
         private int selectedGlass, ingredientStep, strokes, travelDirection, lastStrokeDirection, toolPickedFrame;
         private int hovered = -1;
@@ -1070,6 +1071,30 @@ public class BeerGlassPour : MonoBehaviour
             surface.AddComponent<MeshRenderer>().sharedMaterial = material;
         }
 
+        private void LabelPlaque(Transform parent, string content, Vector3 position, Vector2 size)
+        {
+            Part("PrintedLabelBack", PrimitiveType.Cube, parent, position,
+                new Vector3(size.x, size.y, 0.006f), labelPaper);
+            GameObject writing = NewObject("PrintedName", parent);
+            writing.transform.localPosition = position + Vector3.back * 0.0045f;
+            TextMesh text = writing.AddComponent<TextMesh>();
+            labelFont.RequestCharactersInTexture(content, 64, FontStyle.Bold);
+            text.font = labelFont;
+            text.fontSize = 64;
+            text.fontStyle = FontStyle.Bold;
+            text.anchor = TextAnchor.MiddleCenter;
+            text.alignment = TextAlignment.Center;
+            text.characterSize = 0.04f;
+            text.color = new Color(0.025f, 0.08f, 0.09f);
+            text.text = content;
+            Renderer renderer = writing.GetComponent<Renderer>();
+            renderer.sharedMaterial = labelFont.material;
+            Bounds bounds = renderer.bounds;
+            if (bounds.size.x > 0f && bounds.size.y > 0f)
+                writing.transform.localScale = Vector3.one * Mathf.Min(size.x * 0.9f / bounds.size.x,
+                    size.y * 0.88f / bounds.size.y);
+        }
+
         private void BuildScene()
         {
             mat = MakeMaterial(new Color(0.08f, 0.16f, 0.17f));
@@ -1077,6 +1102,12 @@ public class BeerGlassPour : MonoBehaviour
             glass = MakeMaterial(new Color(0.7f, 0.88f, 0.94f, 0.24f), false, true);
             ice = MakeMaterial(new Color(0.75f, 0.92f, 1f, 0.78f), false, true);
             white = MakeMaterial(new Color(0.85f, 0.91f, 0.85f));
+            spoonMetal = MakeMaterial(new Color(0.9f, 0.59f, 0.18f), true);
+            labelFont = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            Shader labelShader = Shader.Find("Universal Render Pipeline/Unlit");
+            if (labelShader == null) labelShader = Shader.Find("Unlit/Color");
+            labelPaper = new Material(labelShader) { color = new Color(0.99f, 0.97f, 0.87f) };
+            materials.Add(labelPaper);
             Color[] drinkColors = { new Color(0.75f, 0.91f, 0.8f), new Color(0.76f, 0.13f, 0.08f), new Color(0.65f, 0.32f, 0.08f) };
             liquid = MakeMaterial(drinkColors[recipe]);
             Part("Floor", PrimitiveType.Cube, root.transform, new Vector3(0f, -0.05f, 1f), new Vector3(8f, 0.1f, 7f), mat);
@@ -1113,7 +1144,8 @@ public class BeerGlassPour : MonoBehaviour
                     for (int cube = 0; cube < 6; cube++)
                         Part("IceCube", PrimitiveType.Cube, bottle.transform, new Vector3((cube % 3 - 1) * 0.055f,
                             0.06f + (cube / 3) * 0.025f, (cube / 3 - 0.5f) * 0.06f), Vector3.one * 0.05f, ice);
-                    Register(bottle, 10 + index, Vector3.up * 0.08f, new Vector3(0.27f, 0.16f, 0.27f));
+                    LabelPlaque(bottle.transform, "ICE\n07", new Vector3(0f, 0.065f, -0.145f), new Vector2(0.27f, 0.11f));
+                    Register(bottle, 10 + index, Vector3.up * 0.08f, new Vector3(0.29f, 0.20f, 0.33f));
                 }
                 else
                 {
@@ -1122,7 +1154,10 @@ public class BeerGlassPour : MonoBehaviour
                     Part("Neck", PrimitiveType.Cylinder, bottle.transform, Vector3.up * 0.35f, new Vector3(0.055f, 0.055f, 0.055f), ingredientMaterials[index]);
                     Part("Cap", PrimitiveType.Cylinder, bottle.transform, Vector3.up * 0.414f, new Vector3(0.064f, 0.012f, 0.064f), steel);
                     Part("Label", PrimitiveType.Cylinder, bottle.transform, Vector3.up * 0.16f, new Vector3(0.143f, 0.047f, 0.143f), white);
-                    Register(bottle, 10 + index, Vector3.up * 0.22f, new Vector3(0.18f, 0.44f, 0.18f));
+                    string printed = ingredientNames[index].ToUpperInvariant().Replace(" ", "\n");
+                    LabelPlaque(bottle.transform, printed + "\n" + (index + 1).ToString("00"),
+                        new Vector3(0f, 0.17f, -0.088f), new Vector2(0.31f, 0.16f));
+                    Register(bottle, 10 + index, Vector3.up * 0.22f, new Vector3(0.34f, 0.46f, 0.24f));
                 }
             }
             Material highlight = MakeMaterial(new Color(0.25f, 0.8f, 0.53f));
@@ -1148,9 +1183,27 @@ public class BeerGlassPour : MonoBehaviour
             stirrer = NewObject("Stirring stick", root.transform);
             stirrer.transform.localPosition = new Vector3(1.4f, TableY + 0.006f, 0.30f);
             stirStart = stirrer.transform.localPosition;
-            Part("SpoonStem", PrimitiveType.Cylinder, stirrer.transform, Vector3.up * 0.18f, new Vector3(0.009f, 0.16f, 0.009f), steel);
-            Part("SpoonBowl", PrimitiveType.Sphere, stirrer.transform, Vector3.up * 0.022f, new Vector3(0.03f, 0.025f, 0.045f), steel);
-            Register(stirrer, 30, Vector3.up * 0.18f, new Vector3(0.12f, 0.36f, 0.12f));
+            Part("SpoonStem", PrimitiveType.Cylinder, stirrer.transform, Vector3.up * 0.21f, new Vector3(0.018f, 0.19f, 0.018f), spoonMetal);
+            Part("SpoonBowl", PrimitiveType.Sphere, stirrer.transform, Vector3.up * 0.025f, new Vector3(0.045f, 0.025f, 0.062f), spoonMetal);
+            Part("SpoonHandle", PrimitiveType.Sphere, stirrer.transform, Vector3.up * 0.385f, new Vector3(0.034f, 0.045f, 0.034f), mat);
+            GameObject twistObject = NewObject("TwistedSpoonGrip", stirrer.transform);
+            LineRenderer twist = twistObject.AddComponent<LineRenderer>();
+            twist.useWorldSpace = false;
+            twist.positionCount = 49;
+            twist.widthMultiplier = 0.004f;
+            twist.sharedMaterial = spoonMetal;
+            for (int segment = 0; segment < 49; segment++)
+            {
+                float angle = segment * Mathf.PI * 6f / 48f;
+                twist.SetPosition(segment, new Vector3(Mathf.Cos(angle) * 0.0105f,
+                    0.09f + segment * 0.24f / 48f, Mathf.Sin(angle) * 0.0105f));
+            }
+            GameObject spoonStand = NewObject("StirringStickStand", root.transform);
+            spoonStand.transform.localPosition = stirStart;
+            Part("SpoonStandBase", PrimitiveType.Cylinder, spoonStand.transform,
+                Vector3.up * 0.004f, new Vector3(0.18f, 0.004f, 0.18f), mat);
+            LabelPlaque(spoonStand.transform, "STIRRING\nSTICK", new Vector3(0f, 0.055f, -0.11f), new Vector2(0.28f, 0.095f));
+            Register(stirrer, 30, Vector3.up * 0.21f, new Vector3(0.28f, 0.44f, 0.27f));
             GameObject jigger = NewObject("DoubleJigger", root.transform);
             jigger.transform.localPosition = new Vector3(0.06f, TableY + 0.006f, -0.05f);
             GameObject upper = NewObject("1oz", jigger.transform);
@@ -1320,7 +1373,7 @@ public class BeerGlassPour : MonoBehaviour
             {
                 toolHeld = true; toolPickedFrame = Time.frameCount; travel = 0f; travelDirection = 0; toolOffset = 0f;
                 if (phase == Phase.Stir)
-                    stirrer.transform.position = glassObjects[selectedGlass].transform.position + Vector3.up * 0.08f;
+                    stirrer.transform.position = glassObjects[selectedGlass].transform.position + Vector3.up * 0.015f;
                 else
                 {
                     shaker.transform.localPosition = new Vector3(0.3f, 1.28f, -0.72f);
@@ -1400,7 +1453,10 @@ public class BeerGlassPour : MonoBehaviour
         }
         private string TargetName(int code)
         {
-            return code < 3 ? glassNames[code] : code < 20 ? ingredientNames[code - 10] : code == 30 ? "Stirring stick" : "Shaker";
+            if (code < 3) return glassNames[code];
+            if (code < 20) return (code - 9).ToString("00") + "  " + ingredientNames[code - 10];
+            if (code == 30) return phase == Phase.Stir && !toolHeld ? "STIRRING STICK\nCLICK TO PICK UP" : "Stirring stick";
+            return "Shaker";
         }
         public void Tick()
         {
@@ -1418,7 +1474,7 @@ public class BeerGlassPour : MonoBehaviour
                     Vector2 delta = PointerDelta();
                     toolOffset = Mathf.Clamp(toolOffset + (phase == Phase.Stir ? delta.x : delta.y) * 0.002f, -0.12f, 0.12f);
                     if (phase == Phase.Stir)
-                        stirrer.transform.position = glassObjects[selectedGlass].transform.position + new Vector3(toolOffset * 0.25f, 0.08f, 0f);
+                        stirrer.transform.position = glassObjects[selectedGlass].transform.position + new Vector3(toolOffset * 0.35f, 0.015f, 0f);
                     else
                     {
                         shaker.transform.localPosition = new Vector3(0.3f, 1.28f + toolOffset, -0.72f);
