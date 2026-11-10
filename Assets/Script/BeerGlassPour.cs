@@ -44,7 +44,9 @@ public class BeerGlassPour : MonoBehaviour
     private BoxCollider serviceDesk;
     private CocktailEquipment cocktailEquipment;
     private RecipeCards recipeCards;
-    public bool IsRecipeOpen => recipeCards != null && recipeCards.BlocksInput;
+    private CocktailPractice practice;
+    private int practiceReturnFrame = -1;
+    public bool IsRecipeOpen => practiceReturnFrame == Time.frameCount || (recipeCards != null && recipeCards.BlocksInput);
     private readonly LineRenderer[] serviceRings = new LineRenderer[2];
     private Material markerMaterial;
     private Material completedMaterial;
@@ -87,6 +89,11 @@ public class BeerGlassPour : MonoBehaviour
 
     void Update()
     {
+        if (practice != null && practice.IsActive)
+        {
+            practice.Tick();
+            return;
+        }
         prompt = "";
 
         if (IsRecipeOpen)
@@ -541,6 +548,7 @@ public class BeerGlassPour : MonoBehaviour
 
     void OnDestroy()
     {
+        if (practice != null) practice.Dispose();
         if (recipeCards != null) recipeCards.Dispose();
         if (cocktailEquipment != null) cocktailEquipment.Dispose();
         if (serviceMarker != null) Destroy(serviceMarker);
@@ -586,6 +594,11 @@ public class BeerGlassPour : MonoBehaviour
 
     void OnGUI()
     {
+        if (practice != null && practice.IsActive)
+        {
+            practice.Draw();
+            return;
+        }
         if (uniform == null || !uniform.ShiftCompleted)
             return;
 
@@ -663,6 +676,13 @@ public class BeerGlassPour : MonoBehaviour
             prompt,
             textStyle
         );
+    }
+
+    void BeginPractice(int recipe)
+    {
+        recipeCards.Close();
+        if (practice != null) practice.Dispose();
+        practice = new CocktailPractice(this, recipe);
     }
 
     string GlassStatus(int index)
@@ -892,6 +912,626 @@ public class BeerGlassPour : MonoBehaviour
             foreach (Mesh mesh in meshes) UnityEngine.Object.Destroy(mesh);
             if (steel != null) UnityEngine.Object.Destroy(steel);
             if (rubber != null) UnityEngine.Object.Destroy(rubber);
+        }
+    }
+
+    private sealed class CocktailPractice
+    {
+        private enum Phase { ChooseGlass, Build, Stir, Shake, GlassIce, Transfer, TopUp, Ready }
+        private const int Layer = 30;
+        private const float RoundSeconds = 45f;
+        private const float TableY = 0.98f;
+        private readonly BeerGlassPour owner;
+        private readonly int recipe;
+        private readonly string[] recipeNames = { "Gin & Tonic", "Negroni", "Long Island Iced Tea" };
+        private readonly string[] glassNames = { "Rocks glass", "Old-fashioned glass", "Long-drink glass" };
+        private readonly string[] ingredientNames = { "Rum", "Gin", "Vodka", "Triple sec", "Campari", "Tonic water", "Ice", "Cola", "Lemon juice", "Sweet vermouth" };
+        private readonly int[][] buildOrders = { new[] { 1, 5, 6 }, new[] { 9, 1, 4, 6 }, new[] { 0, 1, 2, 3, 6 } };
+        private readonly float[][] buildMeasures = { new[] { 1f, 0f, 0f }, new[] { 1f, 1f, 1f, 0f }, new[] { 0.5f, 0.5f, 0.5f, 0.5f, 0f } };
+        private readonly float[] glassHeights = { 0.16f, 0.20f, 0.32f };
+        private readonly Color ink = new Color(0.89f, 0.94f, 0.92f);
+        private readonly Color panelColor = new Color(0.035f, 0.085f, 0.09f, 0.94f);
+        private readonly Vector3 origin = new Vector3(80f, 0f, 0f);
+        private readonly System.Collections.Generic.List<Material> materials = new System.Collections.Generic.List<Material>();
+        private readonly System.Collections.Generic.List<Mesh> meshes = new System.Collections.Generic.List<Mesh>();
+        private readonly System.Collections.Generic.List<GameObject> iceEffects = new System.Collections.Generic.List<GameObject>();
+        private readonly System.Collections.Generic.Dictionary<int, GameObject> targets = new System.Collections.Generic.Dictionary<int, GameObject>();
+        private readonly System.Collections.Generic.Dictionary<Collider, int> hitTargets = new System.Collections.Generic.Dictionary<Collider, int>();
+        private readonly GameObject[] glassObjects = new GameObject[3];
+        private readonly GameObject[] fills = new GameObject[4];
+        private readonly GameObject[] rings = new GameObject[3];
+        private readonly Material[] ingredientMaterials = new Material[10];
+        private readonly float[] levels = new float[4];
+        private UnityEngine.SceneManagement.Scene scene;
+        private GameObject root, shaker, stirrer, shakerLid, stream;
+        private Camera camera;
+        private BarPlayerMovement sourceMovement;
+        private bool savedMovement, savedUniform, savedCamera;
+        private CursorLockMode savedCursor;
+        private bool savedCursorVisible;
+        private Material steel, glass, ice, liquid, mat, white;
+        private Phase phase;
+        private int selectedGlass, ingredientStep, strokes, travelDirection, lastStrokeDirection, toolPickedFrame;
+        private int hovered = -1;
+        private float remaining, measure = 1f, travel, toolOffset;
+        private bool failed, completed, toolHeld, pouring, released;
+        private string error = "";
+        private GameObject pourObject, pourTarget;
+        private Vector3 pourStartPosition;
+        private Quaternion pourStartRotation;
+        private float pourTime, pourBoost;
+        private Vector3 stirStart, shakerStart;
+        private GUIStyle bodyStyle, titleStyle, smallStyle, labelStyle, buttonStyle, timerStyle;
+        public bool IsActive { get; private set; }
+
+        public CocktailPractice(BeerGlassPour owner, int recipe)
+        {
+            this.owner = owner;
+            this.recipe = Mathf.Clamp(recipe, 0, 2);
+            sourceMovement = owner.GetComponent<BarPlayerMovement>();
+            savedMovement = sourceMovement != null && sourceMovement.enabled;
+            savedUniform = owner.uniform != null && owner.uniform.enabled;
+            savedCamera = owner.playerCamera.enabled;
+            savedCursor = Cursor.lockState;
+            savedCursorVisible = Cursor.visible;
+            scene = UnityEngine.SceneManagement.SceneManager.CreateScene("CocktailPractice_" + owner.GetInstanceID() + "_" + Time.frameCount);
+            root = new GameObject("CocktailPractice_Runtime");
+            UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(root, scene);
+            root.transform.position = origin;
+            root.layer = Layer;
+            BuildScene();
+            owner.playerCamera.enabled = false;
+            if (sourceMovement != null) sourceMovement.enabled = false;
+            if (owner.uniform != null) owner.uniform.enabled = false;
+            camera.enabled = true;
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            IsActive = true;
+            ResetRound();
+        }
+
+        private Material MakeMaterial(Color color, bool metallic = false, bool transparent = false)
+        {
+            Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+            if (shader == null) shader = Shader.Find("Standard");
+            Material material = new Material(shader) { color = color };
+            material.SetFloat("_Smoothness", metallic ? 0.78f : 0.4f);
+            if (metallic) material.SetFloat("_Metallic", 0.85f);
+            if (transparent)
+            {
+                material.SetFloat("_Surface", 1f);
+                material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                material.SetInt("_ZWrite", 0);
+                material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                material.SetOverrideTag("RenderType", "Transparent");
+                material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+            }
+            materials.Add(material);
+            return material;
+        }
+
+        private GameObject NewObject(string name, Transform parent)
+        {
+            GameObject obj = new GameObject(name);
+            obj.layer = Layer;
+            obj.transform.SetParent(parent, false);
+            return obj;
+        }
+
+        private GameObject Part(string name, PrimitiveType type, Transform parent, Vector3 position, Vector3 scale, Material material)
+        {
+            GameObject obj = GameObject.CreatePrimitive(type);
+            obj.name = name;
+            obj.layer = Layer;
+            obj.transform.SetParent(parent, false);
+            obj.transform.localPosition = position;
+            obj.transform.localScale = scale;
+            obj.GetComponent<Renderer>().sharedMaterial = material;
+            Collider collider = obj.GetComponent<Collider>();
+            collider.enabled = false;
+            UnityEngine.Object.Destroy(collider);
+            return obj;
+        }
+
+        private void Register(GameObject obj, int code, Vector3 center, Vector3 size)
+        {
+            BoxCollider collider = obj.AddComponent<BoxCollider>();
+            collider.center = center;
+            collider.size = size;
+            targets.Add(code, obj);
+            hitTargets.Add(collider, code);
+        }
+
+        private void Cup(Transform parent, float radius, float height, Material material, int segments = 48)
+        {
+            Vector2[] profile = { new Vector2(0f, 0f), new Vector2(radius * 0.82f, 0f),
+                new Vector2(radius, height), new Vector2(radius - 0.003f, height),
+                new Vector2(radius * 0.82f - 0.003f, 0.007f), new Vector2(0f, 0.007f), new Vector2(0f, 0f) };
+            Vector3[] vertices = new Vector3[profile.Length * (segments + 1)];
+            int[] triangles = new int[(profile.Length - 1) * segments * 6];
+            int cursor = 0;
+            for (int row = 0; row < profile.Length; row++)
+                for (int column = 0; column <= segments; column++)
+                {
+                    float angle = column * Mathf.PI * 2f / segments;
+                    int index = row * (segments + 1) + column;
+                    vertices[index] = new Vector3(Mathf.Cos(angle) * profile[row].x, profile[row].y, Mathf.Sin(angle) * profile[row].x);
+                    if (row == profile.Length - 1 || column == segments) continue;
+                    int next = index + segments + 1;
+                    triangles[cursor++] = index; triangles[cursor++] = next; triangles[cursor++] = next + 1;
+                    triangles[cursor++] = index; triangles[cursor++] = next + 1; triangles[cursor++] = index + 1;
+                }
+            Mesh mesh = new Mesh { name = "PracticeHollowCup" };
+            mesh.vertices = vertices; mesh.triangles = triangles; mesh.RecalculateNormals(); mesh.RecalculateBounds();
+            meshes.Add(mesh);
+            GameObject surface = NewObject("HollowCup", parent);
+            surface.AddComponent<MeshFilter>().sharedMesh = mesh;
+            surface.AddComponent<MeshRenderer>().sharedMaterial = material;
+        }
+
+        private void BuildScene()
+        {
+            mat = MakeMaterial(new Color(0.08f, 0.16f, 0.17f));
+            steel = MakeMaterial(new Color(0.68f, 0.75f, 0.78f), true);
+            glass = MakeMaterial(new Color(0.7f, 0.88f, 0.94f, 0.24f), false, true);
+            ice = MakeMaterial(new Color(0.75f, 0.92f, 1f, 0.78f), false, true);
+            white = MakeMaterial(new Color(0.85f, 0.91f, 0.85f));
+            Color[] drinkColors = { new Color(0.75f, 0.91f, 0.8f), new Color(0.76f, 0.13f, 0.08f), new Color(0.65f, 0.32f, 0.08f) };
+            liquid = MakeMaterial(drinkColors[recipe]);
+            Part("Floor", PrimitiveType.Cube, root.transform, new Vector3(0f, -0.05f, 1f), new Vector3(8f, 0.1f, 7f), mat);
+            Part("Backdrop", PrimitiveType.Cube, root.transform, new Vector3(0f, 2f, 2.7f), new Vector3(7f, 4f, 0.1f), mat);
+            Part("Bench", PrimitiveType.Cube, root.transform, new Vector3(0f, 0.45f, 0.8f), new Vector3(4.4f, 0.9f, 1.7f), mat);
+            Part("Worktop", PrimitiveType.Cube, root.transform, new Vector3(0f, 0.94f, 0.8f), new Vector3(4.6f, 0.08f, 1.9f), steel);
+            Part("BarMat", PrimitiveType.Cube, root.transform, new Vector3(0f, TableY + 0.003f, 0.35f), new Vector3(4.2f, 0.006f, 0.8f), mat);
+            GameObject view = NewObject("PracticeFirstPersonCamera", root.transform);
+            view.transform.localPosition = new Vector3(0f, 1.8f, -1.6f);
+            view.transform.LookAt(origin + new Vector3(0f, 1.15f, 0.9f));
+            camera = view.AddComponent<Camera>();
+            camera.enabled = false;
+            camera.fieldOfView = 60f;
+            camera.nearClipPlane = 0.05f;
+            camera.farClipPlane = 30f;
+            camera.cullingMask = 1 << Layer;
+            camera.clearFlags = CameraClearFlags.SolidColor;
+            camera.backgroundColor = new Color(0.025f, 0.065f, 0.075f);
+            GameObject lighting = NewObject("PracticeKeyLight", root.transform);
+            lighting.transform.localRotation = Quaternion.Euler(40f, -25f, 0f);
+            Light light = lighting.AddComponent<Light>();
+            light.type = LightType.Directional; light.intensity = 1.4f; light.cullingMask = 1 << Layer;
+            Color[] colors = { new Color(0.5f, 0.22f, 0.08f), new Color(0.22f, 0.52f, 0.36f), new Color(0.55f, 0.73f, 0.85f),
+                new Color(0.9f, 0.51f, 0.12f), new Color(0.8f, 0.08f, 0.13f), new Color(0.35f, 0.73f, 0.82f),
+                new Color(0.7f, 0.9f, 1f), new Color(0.19f, 0.09f, 0.06f), new Color(0.95f, 0.81f, 0.23f), new Color(0.42f, 0.1f, 0.2f) };
+            for (int index = 0; index < ingredientNames.Length; index++)
+            {
+                ingredientMaterials[index] = MakeMaterial(colors[index]);
+                GameObject bottle = NewObject(ingredientNames[index], root.transform);
+                bottle.transform.localPosition = new Vector3(-1.8f + index * 0.4f, TableY + 0.006f, 1.44f);
+                if (index == 6)
+                {
+                    Cup(bottle.transform, 0.13f, 0.075f, steel);
+                    for (int cube = 0; cube < 6; cube++)
+                        Part("IceCube", PrimitiveType.Cube, bottle.transform, new Vector3((cube % 3 - 1) * 0.055f,
+                            0.06f + (cube / 3) * 0.025f, (cube / 3 - 0.5f) * 0.06f), Vector3.one * 0.05f, ice);
+                    Register(bottle, 10 + index, Vector3.up * 0.08f, new Vector3(0.27f, 0.16f, 0.27f));
+                }
+                else
+                {
+                    Part("BottleBody", PrimitiveType.Cylinder, bottle.transform, Vector3.up * 0.145f, new Vector3(0.14f, 0.145f, 0.14f), ingredientMaterials[index]);
+                    Part("Shoulder", PrimitiveType.Sphere, bottle.transform, Vector3.up * 0.29f, new Vector3(0.14f, 0.08f, 0.14f), ingredientMaterials[index]);
+                    Part("Neck", PrimitiveType.Cylinder, bottle.transform, Vector3.up * 0.35f, new Vector3(0.055f, 0.055f, 0.055f), ingredientMaterials[index]);
+                    Part("Cap", PrimitiveType.Cylinder, bottle.transform, Vector3.up * 0.414f, new Vector3(0.064f, 0.012f, 0.064f), steel);
+                    Part("Label", PrimitiveType.Cylinder, bottle.transform, Vector3.up * 0.16f, new Vector3(0.143f, 0.047f, 0.143f), white);
+                    Register(bottle, 10 + index, Vector3.up * 0.22f, new Vector3(0.18f, 0.44f, 0.18f));
+                }
+            }
+            Material highlight = MakeMaterial(new Color(0.25f, 0.8f, 0.53f));
+            for (int index = 0; index < 3; index++)
+            {
+                GameObject vessel = NewObject(glassNames[index], root.transform);
+                vessel.transform.localPosition = new Vector3(-1.2f + index * 0.55f, TableY + 0.006f, 0.32f);
+                float radius = index == 0 ? 0.07f : index == 1 ? 0.083f : 0.055f;
+                Cup(vessel.transform, radius, glassHeights[index], glass, index == 1 ? 12 : 48);
+                Register(vessel, index, Vector3.up * glassHeights[index] * 0.5f, new Vector3(radius * 2f, glassHeights[index], radius * 2f));
+                glassObjects[index] = vessel;
+                fills[index] = Part("Drink", PrimitiveType.Cylinder, vessel.transform, Vector3.up * 0.01f, new Vector3(radius * 1.5f, 0.001f, radius * 1.5f), liquid);
+                rings[index] = Part("SelectedGlass", PrimitiveType.Cylinder, root.transform,
+                    vessel.transform.localPosition - Vector3.up * 0.002f, new Vector3(radius * 2.5f, 0.002f, radius * 2.5f), highlight);
+            }
+            shaker = NewObject("Shaker", root.transform);
+            shaker.transform.localPosition = new Vector3(0.6f, TableY + 0.006f, 0.35f);
+            shakerStart = shaker.transform.localPosition;
+            Cup(shaker.transform, 0.065f, 0.28f, steel);
+            Register(shaker, 31, Vector3.up * 0.15f, new Vector3(0.15f, 0.33f, 0.15f));
+            shakerLid = Part("ShakerLid", PrimitiveType.Cylinder, shaker.transform, Vector3.up * 0.30f, new Vector3(0.11f, 0.04f, 0.11f), steel);
+            fills[3] = Part("ShakerMixture", PrimitiveType.Cylinder, shaker.transform, Vector3.up * 0.01f, new Vector3(0.095f, 0.001f, 0.095f), liquid);
+            stirrer = NewObject("Stirring stick", root.transform);
+            stirrer.transform.localPosition = new Vector3(1.4f, TableY + 0.006f, 0.30f);
+            stirStart = stirrer.transform.localPosition;
+            Part("SpoonStem", PrimitiveType.Cylinder, stirrer.transform, Vector3.up * 0.18f, new Vector3(0.009f, 0.16f, 0.009f), steel);
+            Part("SpoonBowl", PrimitiveType.Sphere, stirrer.transform, Vector3.up * 0.022f, new Vector3(0.03f, 0.025f, 0.045f), steel);
+            Register(stirrer, 30, Vector3.up * 0.18f, new Vector3(0.12f, 0.36f, 0.12f));
+            GameObject jigger = NewObject("DoubleJigger", root.transform);
+            jigger.transform.localPosition = new Vector3(0.06f, TableY + 0.006f, -0.05f);
+            GameObject upper = NewObject("1oz", jigger.transform);
+            upper.transform.localPosition = Vector3.up * 0.05f; Cup(upper.transform, 0.036f, 0.065f, steel);
+            GameObject lower = NewObject("0.5oz", jigger.transform);
+            lower.transform.localPosition = Vector3.up * 0.05f; lower.transform.localRotation = Quaternion.Euler(180f, 0f, 0f); Cup(lower.transform, 0.028f, 0.05f, steel);
+            stream = Part("PourStream", PrimitiveType.Cylinder, root.transform, Vector3.zero, new Vector3(0.014f, 0.12f, 0.014f), liquid);
+            stream.SetActive(false);
+            Physics.SyncTransforms();
+        }
+
+        private void ResetRound()
+        {
+            StopPour(false);
+            foreach (GameObject effect in iceEffects) if (effect != null) UnityEngine.Object.Destroy(effect);
+            iceEffects.Clear();
+            for (int index = 0; index < fills.Length; index++) { levels[index] = 0f; fills[index].SetActive(false); }
+            foreach (GameObject ring in rings) ring.SetActive(false);
+            ReturnTool();
+            shakerLid.SetActive(false);
+            phase = Phase.ChooseGlass; selectedGlass = -1; ingredientStep = 0;
+            strokes = 0; travel = 0f; travelDirection = 0; lastStrokeDirection = 0;
+            failed = false; completed = false; error = ""; measure = 1f; remaining = RoundSeconds;
+            hovered = -1;
+        }
+
+        private int ExpectedIngredient()
+        {
+            if (phase == Phase.Build) return buildOrders[recipe][ingredientStep];
+            if (phase == Phase.GlassIce) return 6;
+            if (phase == Phase.TopUp) return ingredientStep == 0 ? 8 : 7;
+            return -1;
+        }
+
+        private float ExpectedMeasure()
+        {
+            if (phase == Phase.Build) return buildMeasures[recipe][ingredientStep];
+            return phase == Phase.TopUp && ingredientStep == 0 ? 1f : 0f;
+        }
+
+        private string NextInstruction()
+        {
+            switch (phase)
+            {
+                case Phase.ChooseGlass: return "Choose the " + glassNames[recipe] + ".";
+                case Phase.Stir: return toolHeld ? "Hold LEFT CLICK and move LEFT / RIGHT. Complete 15 round trips." : "Click the stirring stick to pick it up.";
+                case Phase.Shake: return toolHeld ? "Hold LEFT CLICK and move UP / DOWN. Complete 15 round trips." : "Click the shaker to pick it up.";
+                case Phase.Transfer: return "Click the shaker to pour into the iced long-drink glass.";
+                case Phase.Ready: return "Your cocktail is ready. Click FINISH.";
+                default:
+                    int ingredient = ExpectedIngredient();
+                    string amount = ExpectedMeasure() > 0f ? ExpectedMeasure().ToString("0.#") + " oz of " : "";
+                    return "Click " + amount + ingredientNames[ingredient] + (phase == Phase.Build && recipe == 2 ? " to add it to the shaker." : " to add it to your glass.");
+            }
+        }
+
+        private void Fail(string message)
+        {
+            error = message; failed = true; StopPour(false); ReturnTool();
+        }
+
+        private void AdvanceIngredient()
+        {
+            if (phase == Phase.GlassIce) { phase = Phase.Transfer; return; }
+            if (phase == Phase.TopUp)
+            {
+                ingredientStep++;
+                if (ingredientStep == 2) phase = Phase.Ready;
+                return;
+            }
+            ingredientStep++;
+            if (ingredientStep == buildOrders[recipe].Length)
+            {
+                phase = recipe == 0 ? Phase.Ready : recipe == 1 ? Phase.Stir : Phase.Shake;
+                if (phase == Phase.Shake) shakerLid.SetActive(true);
+            }
+        }
+
+        private void AddIngredient(int ingredient)
+        {
+            if (phase == Phase.ChooseGlass) { Fail("Choose the correct glass before adding ingredients."); return; }
+            int expected = ExpectedIngredient();
+            if (expected < 0) { Fail("That ingredient is not allowed at this step.\n" + NextInstruction()); return; }
+            if (ingredient != expected)
+            {
+                Fail("Incorrect ingredient or order.\nExpected: " + ingredientNames[expected] + ".\nYou chose: " + ingredientNames[ingredient] + "."); return;
+            }
+            float required = ExpectedMeasure();
+            if (required > 0f && !Mathf.Approximately(measure, required))
+            {
+                Fail("Incorrect measure.\nUse " + required.ToString("0.#") + " oz for " + ingredientNames[ingredient] + "."); return;
+            }
+            GameObject vessel = phase == Phase.Build && recipe == 2 ? shaker : glassObjects[selectedGlass];
+            if (ingredient == 6) AddIce(vessel);
+            else BeginPour(targets[10 + ingredient], vessel, ingredientMaterials[ingredient], ingredient == 5 || ingredient == 7 ? 0.07f : 0.028f);
+            AdvanceIngredient();
+        }
+
+        private void AddIce(GameObject vessel)
+        {
+            for (int index = 0; index < 4; index++)
+            {
+                GameObject cube = Part("AddedIce", PrimitiveType.Cube, vessel.transform,
+                    new Vector3((index % 2 - 0.5f) * 0.04f, 0.06f + index / 2 * 0.035f, (index / 2 - 0.5f) * 0.035f), Vector3.one * 0.033f, ice);
+                cube.transform.localRotation = Quaternion.Euler(12f * index, 23f * index, 9f * index);
+                iceEffects.Add(cube);
+            }
+        }
+
+        private void BeginPour(GameObject bottle, GameObject vessel, Material material, float boost)
+        {
+            pouring = true; pourTime = 0f; pourObject = bottle; pourTarget = vessel; pourBoost = boost;
+            pourStartPosition = bottle.transform.localPosition; pourStartRotation = bottle.transform.localRotation;
+            stream.GetComponent<Renderer>().sharedMaterial = material;
+        }
+
+        private void TickPour()
+        {
+            pourTime += Time.unscaledDeltaTime;
+            float time = Mathf.Clamp01(pourTime / 0.45f);
+            float blend = time < 0.25f ? time * 4f : time > 0.75f ? (1f - time) * 4f : 1f;
+            Quaternion tilted = Quaternion.Euler(0f, 0f, -55f);
+            Vector3 spout = tilted * (Vector3.up * (pourObject == shaker ? 0.3f : 0.42f));
+            Vector3 destination = pourTarget.transform.localPosition + Vector3.up * 0.35f - spout;
+            pourObject.transform.localPosition = Vector3.Lerp(pourStartPosition, destination, blend);
+            pourObject.transform.localRotation = Quaternion.Slerp(pourStartRotation, tilted, blend);
+            stream.transform.localPosition = pourTarget.transform.localPosition + Vector3.up * 0.22f;
+            stream.SetActive(time > 0.25f && time < 0.75f);
+            if (time >= 1f) StopPour(true);
+        }
+
+        private void StopPour(bool apply)
+        {
+            if (!pouring) return;
+            if (pourObject != null) { pourObject.transform.localPosition = pourStartPosition; pourObject.transform.localRotation = pourStartRotation; }
+            if (stream != null) stream.SetActive(false);
+            if (apply && pourTarget != null)
+            {
+                int index = pourTarget == shaker ? 3 : selectedGlass;
+                float cap = index == 3 ? 0.20f : glassHeights[index] * 0.73f;
+                levels[index] = Mathf.Min(cap, levels[index] + pourBoost);
+                GameObject fill = fills[index];
+                fill.SetActive(true);
+                fill.transform.localPosition = Vector3.up * (0.008f + levels[index] * 0.5f);
+                Vector3 scale = fill.transform.localScale; scale.y = levels[index] * 0.5f; fill.transform.localScale = scale;
+            }
+            if (apply && pourObject == shaker) { fills[3].SetActive(false); levels[3] = 0f; }
+            pouring = false; pourObject = null; pourTarget = null;
+        }
+
+        private void SelectTarget(int code)
+        {
+            if (code >= 10 && code < 20) { AddIngredient(code - 10); return; }
+            if (code >= 0 && code < 3)
+            {
+                if (phase != Phase.ChooseGlass) return;
+                if (code != recipe) { Fail("Incorrect glass.\nChoose the " + glassNames[recipe] + " for " + recipeNames[recipe] + "."); return; }
+                selectedGlass = code; rings[code].SetActive(true); phase = Phase.Build; return;
+            }
+            if (phase == Phase.Transfer && code == 31)
+            {
+                shakerLid.SetActive(false);
+                BeginPour(shaker, glassObjects[selectedGlass], liquid, 0.15f);
+                phase = Phase.TopUp; ingredientStep = 0; return;
+            }
+            if ((phase == Phase.Stir && code == 30) || (phase == Phase.Shake && code == 31))
+            {
+                toolHeld = true; toolPickedFrame = Time.frameCount; travel = 0f; travelDirection = 0; toolOffset = 0f;
+                if (phase == Phase.Stir)
+                    stirrer.transform.position = glassObjects[selectedGlass].transform.position + Vector3.up * 0.08f;
+                else
+                {
+                    shaker.transform.localPosition = new Vector3(0.3f, 1.28f, -0.72f);
+                    shaker.transform.localRotation = Quaternion.Euler(0f, 0f, -15f);
+                }
+            }
+        }
+
+        private void ReturnTool()
+        {
+            toolHeld = false; toolOffset = 0f;
+            if (stirrer != null) { stirrer.transform.localPosition = stirStart; stirrer.transform.localRotation = Quaternion.identity; }
+            if (shaker != null) { shaker.transform.localPosition = shakerStart; shaker.transform.localRotation = Quaternion.identity; }
+        }
+
+        private void CountMotion(float delta)
+        {
+            if (Mathf.Abs(delta) < 0.5f) return;
+            int direction = delta > 0f ? 1 : -1;
+            if (direction != travelDirection) { travelDirection = direction; travel = 0f; }
+            travel += Mathf.Abs(delta);
+            float threshold = Mathf.Clamp(Screen.height * 0.05f, 20f, 60f);
+            if (travel < threshold || direction == lastStrokeDirection) return;
+            lastStrokeDirection = direction; travel = 0f; strokes++;
+            if (strokes >= 30)
+            {
+                ReturnTool();
+                phase = phase == Phase.Stir ? Phase.Ready : Phase.GlassIce;
+            }
+        }
+
+        private Vector2 Pointer()
+        {
+#if ENABLE_INPUT_SYSTEM
+            return Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
+#else
+            return Input.mousePosition;
+#endif
+        }
+        private Vector2 PointerDelta()
+        {
+#if ENABLE_INPUT_SYSTEM
+            return Mouse.current != null ? Mouse.current.delta.ReadValue() : Vector2.zero;
+#else
+            return new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y")) * 18f;
+#endif
+        }
+        private bool LeftHeld()
+        {
+#if ENABLE_INPUT_SYSTEM
+            return Mouse.current != null && Mouse.current.leftButton.isPressed;
+#else
+            return Input.GetMouseButton(0);
+#endif
+        }
+        private Rect MeasurePanel() { return new Rect(16f, Screen.height - 118f, 302f, 102f); }
+        private Rect FinishButton() { return new Rect(Screen.width - 202f, Screen.height - 83f, 186f, 62f); }
+        private bool OverUI(Vector2 pointer)
+        {
+            return new Rect(0f, 0f, Screen.width, 132f).Contains(pointer) || MeasurePanel().Contains(pointer)
+                || (phase == Phase.Ready && FinishButton().Contains(pointer));
+        }
+        private Rect LabelRect(int code)
+        {
+            if (code >= 10 && code < 20)
+            {
+                int index = code - 10;
+                float cellWidth = (Screen.width - 32f) / 5f;
+                return new Rect(16f + index % 5 * cellWidth, 144f + index / 5 * 40f, cellWidth - 6f, 36f);
+            }
+            GameObject target = targets[code];
+            float height = code >= 10 && code < 20 ? (code == 16 ? 0.17f : 0.49f) : -0.03f;
+            Vector3 screen = camera.WorldToScreenPoint(target.transform.position + Vector3.up * height);
+            const float labelWidth = 136f;
+            float x = Mathf.Clamp(screen.x - labelWidth * 0.5f, 8f, Mathf.Max(8f, Screen.width - labelWidth - 8f));
+            return new Rect(x, Screen.height - screen.y - 21f, labelWidth, 42f);
+        }
+        private string TargetName(int code)
+        {
+            return code < 3 ? glassNames[code] : code < 20 ? ingredientNames[code - 10] : code == 30 ? "Stirring stick" : "Shaker";
+        }
+        public void Tick()
+        {
+            if (!IsActive) return;
+            if (owner.PressedRecipeClose()) { Exit(); return; }
+            if (failed || completed) return;
+            remaining = Mathf.Max(0f, remaining - Time.unscaledDeltaTime);
+            if (remaining <= 0f) { Fail("Time's up!\nThe 45-second limit has expired."); return; }
+            if (pouring) { TickPour(); return; }
+            Vector2 pointer = Pointer(); Vector2 guiPointer = new Vector2(pointer.x, Screen.height - pointer.y);
+            if (toolHeld)
+            {
+                if (LeftHeld() && !OverUI(guiPointer) && toolPickedFrame != Time.frameCount)
+                {
+                    Vector2 delta = PointerDelta();
+                    toolOffset = Mathf.Clamp(toolOffset + (phase == Phase.Stir ? delta.x : delta.y) * 0.002f, -0.12f, 0.12f);
+                    if (phase == Phase.Stir)
+                        stirrer.transform.position = glassObjects[selectedGlass].transform.position + new Vector3(toolOffset * 0.25f, 0.08f, 0f);
+                    else
+                    {
+                        shaker.transform.localPosition = new Vector3(0.3f, 1.28f + toolOffset, -0.72f);
+                        shaker.transform.localRotation = Quaternion.Euler(0f, 0f, -15f);
+                    }
+                    CountMotion(phase == Phase.Stir ? delta.x : delta.y);
+                }
+                else { travel = 0f; travelDirection = 0; }
+                return;
+            }
+            hovered = -1;
+            if (OverUI(guiPointer)) return;
+            foreach (int code in targets.Keys)
+                if (LabelRect(code).Contains(guiPointer)) { hovered = code; break; }
+            if (hovered < 0 && Physics.Raycast(camera.ScreenPointToRay(pointer), out RaycastHit hit, 8f,
+                1 << Layer, QueryTriggerInteraction.Ignore) && hitTargets.TryGetValue(hit.collider, out int found)) hovered = found;
+            if (hovered >= 0 && owner.PressedLeftClick()) SelectTarget(hovered);
+        }
+
+        private void EnsureStyles()
+        {
+            if (bodyStyle != null) return;
+            bodyStyle = new GUIStyle(GUI.skin.label) { fontSize = 17, wordWrap = true, alignment = TextAnchor.MiddleLeft };
+            bodyStyle.normal.textColor = ink;
+            titleStyle = new GUIStyle(bodyStyle) { fontSize = 25, fontStyle = FontStyle.Bold };
+            smallStyle = new GUIStyle(bodyStyle) { fontSize = 13 };
+            labelStyle = new GUIStyle(bodyStyle) { fontSize = 12, alignment = TextAnchor.MiddleCenter };
+            buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 16, fontStyle = FontStyle.Bold, wordWrap = true };
+            timerStyle = new GUIStyle(titleStyle) { alignment = TextAnchor.MiddleRight };
+        }
+        private static void Fill(Rect rect, Color color)
+        {
+            Color old = GUI.color; GUI.color = color; GUI.DrawTexture(rect, Texture2D.whiteTexture); GUI.color = old;
+        }
+        private void Exit()
+        {
+            if (!IsActive) return;
+            IsActive = false;
+            if (camera != null) camera.enabled = false;
+            if (owner.playerCamera != null) owner.playerCamera.enabled = savedCamera;
+            if (sourceMovement != null) sourceMovement.enabled = savedMovement;
+            if (owner.uniform != null) owner.uniform.enabled = savedUniform;
+            Cursor.lockState = savedCursor; Cursor.visible = savedCursorVisible;
+            owner.practiceReturnFrame = Time.frameCount;
+            ReleaseResources();
+        }
+        private void ReleaseResources()
+        {
+            if (released) return;
+            released = true;
+            if (root != null) root.SetActive(false);
+            if (scene.IsValid() && scene.isLoaded && Application.isPlaying) UnityEngine.SceneManagement.SceneManager.UnloadSceneAsync(scene);
+            foreach (Material material in materials) if (material != null) UnityEngine.Object.Destroy(material);
+            foreach (Mesh mesh in meshes) if (mesh != null) UnityEngine.Object.Destroy(mesh);
+        }
+        public void Draw()
+        {
+            if (!IsActive) return;
+            EnsureStyles();
+            if (failed || completed)
+            {
+                Fill(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.76f));
+                float width = Mathf.Min(600f, Screen.width - 32f);
+                Rect popup = new Rect((Screen.width - width) * 0.5f, (Screen.height - 300f) * 0.5f, width, 300f);
+                Fill(popup, panelColor);
+                GUI.Label(new Rect(popup.x + 26f, popup.y + 20f, width - 52f, 50f), completed ? "COCKTAIL COMPLETE" : "TRY AGAIN", titleStyle);
+                GUI.Label(new Rect(popup.x + 26f, popup.y + 80f, width - 52f, 120f), completed
+                    ? recipeNames[recipe] + " is ready to serve.\nCorrect glass, ingredients and method!" : error, bodyStyle);
+                if (GUI.Button(new Rect(popup.x + 26f, popup.yMax - 70f, (width - 68f) * 0.5f, 44f), "Retry - 45 seconds", buttonStyle)) ResetRound();
+                if (GUI.Button(new Rect(popup.center.x + 8f, popup.yMax - 70f, (width - 68f) * 0.5f, 44f), "Back to the bar", buttonStyle)) Exit();
+                return;
+            }
+            Fill(new Rect(16f, 16f, Screen.width - 32f, 116f), panelColor);
+            GUI.Label(new Rect(34f, 26f, Screen.width - 340f, 36f), recipeNames[recipe] + " / PRACTICE", titleStyle);
+            GUI.Label(new Rect(34f, 68f, Screen.width - 290f, 48f), pouring ? "Pouring..." : NextInstruction(), bodyStyle);
+            Color old = GUI.color; GUI.color = remaining <= 10f ? new Color(1f, 0.4f, 0.3f) : ink;
+            GUI.Label(new Rect(Screen.width - 235f, 65f, 195f, 38f), remaining.ToString("0.0") + " s / 45", timerStyle); GUI.color = old;
+            Fill(new Rect(34f, 120f, (Screen.width - 68f) * remaining / RoundSeconds, 3f), remaining <= 10f ? Color.red : new Color(0.4f, 0.8f, 0.6f));
+            if (GUI.Button(new Rect(Screen.width - 116f, 28f, 82f, 28f), "Exit [Esc]", buttonStyle)) { Exit(); return; }
+            foreach (int code in targets.Keys)
+            {
+                Rect rect = LabelRect(code);
+                bool expected = (phase == Phase.ChooseGlass && code == recipe) || (ExpectedIngredient() >= 0 && code == 10 + ExpectedIngredient())
+                    || (phase == Phase.Stir && code == 30) || ((phase == Phase.Shake || phase == Phase.Transfer) && code == 31);
+                Fill(rect, code == hovered ? new Color(0.2f, 0.4f, 0.32f, 0.95f) : new Color(0.03f, 0.08f, 0.08f, 0.86f));
+                if (code >= 10 && code < 20) Fill(new Rect(rect.x, rect.y, 3f, rect.height), ingredientMaterials[code - 10].color);
+                Color previous = GUI.color; if (expected) GUI.color = new Color(0.6f, 1f, 0.72f);
+                GUI.Label(rect, TargetName(code), labelStyle); GUI.color = previous;
+            }
+            Rect measures = MeasurePanel(); Fill(measures, panelColor);
+            GUI.Label(new Rect(measures.x + 12f, measures.y + 7f, 278f, 26f), "JIGGER MEASURE", smallStyle);
+            bool canMeasure = !pouring && !toolHeld;
+            bool previousEnabled = GUI.enabled; GUI.enabled = canMeasure;
+            if (GUI.Button(new Rect(measures.x + 12f, measures.y + 38f, 132f, 48f), (measure == 0.5f ? "SELECTED\n" : "") + "0.5 oz", buttonStyle)) measure = 0.5f;
+            if (GUI.Button(new Rect(measures.x + 158f, measures.y + 38f, 132f, 48f), (measure == 1f ? "SELECTED\n" : "") + "1 oz", buttonStyle)) measure = 1f;
+            GUI.enabled = previousEnabled;
+            if (phase == Phase.Stir || phase == Phase.Shake)
+            {
+                Rect progress = new Rect(334f, Screen.height - 110f, Mathf.Max(200f, Screen.width - 350f), 94f); Fill(progress, panelColor);
+                GUI.Label(new Rect(progress.x + 12f, progress.y + 8f, progress.width - 24f, 32f),
+                    (phase == Phase.Stir ? "STIR LEFT / RIGHT: " : "SHAKE UP / DOWN: ") + (strokes / 2) + " / 15 ROUND TRIPS", bodyStyle);
+                GUI.Label(new Rect(progress.x + 12f, progress.y + 42f, progress.width - 24f, 42f),
+                    toolHeld ? "Hold LEFT CLICK and drag. Tiny movements do not count." : "Click the highlighted tool, then hold LEFT CLICK and drag.", smallStyle);
+            }
+            if (phase != Phase.Stir && phase != Phase.Shake && phase != Phase.Ready)
+                GUI.Label(new Rect(334f, Screen.height - 102f, Mathf.Max(200f, Screen.width - 350f), 82f),
+                    "Click a glass, then choose a jigger measure.\nClick a bottle or its ingredient label to add it.\nESC returns to the bar.", smallStyle);
+            if (phase == Phase.Ready && !pouring && GUI.Button(FinishButton(), "FINISH", buttonStyle)) completed = true;
+        }
+        public void Dispose()
+        {
+            Exit();
+            ReleaseResources();
         }
     }
 
@@ -1187,7 +1827,11 @@ public class BeerGlassPour : MonoBehaviour
                 GUILayout.EndArea();
 
                 Fill(new Rect(36f, 614f, 968f, 1f), new Color(0.78f, 0.78f, 0.7f));
-                GUI.Label(new Rect(36f, 633f, 315f, 24f), "ESC returns to the bar", smallStyle);
+                if (Button(new Rect(36f, 630f, 280f, 32f), "Start to make", true))
+                {
+                    owner.BeginPractice(selected);
+                    GUIUtility.ExitGUI();
+                }
                 if (Button(new Rect(384f, 630f, 155f, 32f), "<  PREVIOUS")) SwitchTo(selected - 1);
                 GUI.Label(new Rect(630f, 630f, 130f, 32f), "0" + (selected + 1) + " / 03", centeredStyle);
                 if (Button(new Rect(849f, 630f, 155f, 32f), "NEXT  >")) SwitchTo(selected + 1);
