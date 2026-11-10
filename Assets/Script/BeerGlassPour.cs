@@ -43,6 +43,8 @@ public class BeerGlassPour : MonoBehaviour
     private GameObject serviceMarker;
     private BoxCollider serviceDesk;
     private CocktailEquipment cocktailEquipment;
+    private RecipeCards recipeCards;
+    public bool IsRecipeOpen => recipeCards != null && recipeCards.BlocksInput;
     private readonly LineRenderer[] serviceRings = new LineRenderer[2];
     private Material markerMaterial;
     private Material completedMaterial;
@@ -80,15 +82,24 @@ public class BeerGlassPour : MonoBehaviour
         CreateBeerStream();
         CreateServiceMarker();
         cocktailEquipment = new CocktailEquipment(this);
+        recipeCards = new RecipeCards(this, cocktailEquipment.Table);
     }
 
     void Update()
     {
         prompt = "";
 
+        if (IsRecipeOpen)
+        {
+            if (recipeCards.IsOpen && PressedRecipeClose()) recipeCards.Close();
+            return;
+        }
+
         if (uniform == null || !uniform.isActiveAndEnabled
             || !uniform.ShiftCompleted || uniform.IsGuidePlaying)
             return;
+
+        if (recipeCards != null) recipeCards.SetAvailable(TaskCompleted);
 
         if (serviceMarker != null)
         {
@@ -100,6 +111,12 @@ public class BeerGlassPour : MonoBehaviour
 
         if (Cursor.lockState != CursorLockMode.Locked)
             return;
+
+        if (recipeCards != null && recipeCards.HandleInput(PressedLeftClick(), out string recipePrompt))
+        {
+            prompt = recipePrompt;
+            return;
+        }
 
         if (heldGlass == null && cocktailEquipment != null
             && cocktailEquipment.HandleInput(PressedLeftClick(), out string equipmentPrompt))
@@ -524,6 +541,7 @@ public class BeerGlassPour : MonoBehaviour
 
     void OnDestroy()
     {
+        if (recipeCards != null) recipeCards.Dispose();
         if (cocktailEquipment != null) cocktailEquipment.Dispose();
         if (serviceMarker != null) Destroy(serviceMarker);
         if (beerStream != null) Destroy(beerStream);
@@ -557,10 +575,25 @@ public class BeerGlassPour : MonoBehaviour
 #endif
     }
 
+    bool PressedRecipeClose()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame;
+#else
+        return Input.GetKeyDown(KeyCode.Escape);
+#endif
+    }
+
     void OnGUI()
     {
         if (uniform == null || !uniform.ShiftCompleted)
             return;
+
+        if (recipeCards != null && recipeCards.IsOpen)
+        {
+            recipeCards.DrawOverlay();
+            return;
+        }
 
         if (textStyle == null)
         {
@@ -598,6 +631,7 @@ public class BeerGlassPour : MonoBehaviour
         bool cocktailFocus = TaskCompleted || (cocktailEquipment != null && cocktailEquipment.IsHolding);
         GUI.Label(instructionArea, (cocktailFocus ? "COCKTAIL STATION\n" : "PICK UP > POUR > SERVE\n") + instruction, textStyle);
         if (cocktailEquipment != null) cocktailEquipment.DrawLabels(textStyle);
+        if (recipeCards != null) recipeCards.DrawNoteLabels(textStyle);
 
         if (serviceMarker != null && serviceMarker.activeInHierarchy)
         {
@@ -640,6 +674,7 @@ public class BeerGlassPour : MonoBehaviour
     private sealed class CocktailEquipment
     {
         private readonly BeerGlassPour owner;
+        public BoxCollider Table { get; private set; }
         private GameObject root;
         private readonly GameObject[] tools = new GameObject[3];
         private readonly Vector3[] slots = new Vector3[3];
@@ -673,6 +708,7 @@ public class BeerGlassPour : MonoBehaviour
                 Debug.LogError("CocktailEquipment: 뒤쪽 GlassTable_Top 테이블을 찾지 못했습니다.");
                 return;
             }
+            Table = table;
             Shader shader = Shader.Find("Universal Render Pipeline/Lit");
             if (shader == null) shader = Shader.Find("Standard");
             if (shader == null)
@@ -856,6 +892,189 @@ public class BeerGlassPour : MonoBehaviour
             foreach (Mesh mesh in meshes) UnityEngine.Object.Destroy(mesh);
             if (steel != null) UnityEngine.Object.Destroy(steel);
             if (rubber != null) UnityEngine.Object.Destroy(rubber);
+        }
+    }
+
+    private sealed class RecipeCards
+    {
+        private readonly BeerGlassPour owner;
+        private GameObject root;
+        private readonly GameObject[] notes = new GameObject[3];
+        private readonly Material[] paper = new Material[3];
+        private readonly string[] titles = { "Gin & Tonic", "네그로니", "롱아일랜드 아이스티" };
+        private readonly string[] englishTitles = { "GIN & TONIC", "NEGRONI", "LONG ISLAND\nICED TEA" };
+        private readonly string[] ingredients = {
+            "진 1 oz\n토닉워터: 잔을 채울 만큼\n얼음",
+            "스위트 베르무트 1 oz\n진 1 oz\n캄파리 1 oz\n얼음",
+            "럼 0.5 oz\n진 0.5 oz\n보드카 0.5 oz\n트리플섹 0.5 oz\n레몬주스 1 oz\n콜라: 나머지를 채울 만큼\n얼음"
+        };
+        private readonly string[] steps = {
+            "1. 언더락 글라스를 준비하세요.\n2. 진 1 oz를 정확히 계량해서 부으세요.\n3. 토닉워터로 잔을 채우세요.\n4. 얼음을 넣고 서빙하세요.",
+            "1. 올드패션 글라스를 선택하세요.\n2. 스위트 베르무트, 진, 캄파리를 각각 1 oz씩 계량해서 부으세요.\n3. 얼음을 넣고 충분히 저어주세요.",
+            "1. 롱드링크 글라스를 준비하세요.\n2. 럼, 진, 보드카, 트리플섹을 각각 0.5 oz씩 쉐이커에 넣으세요.\n3. 얼음을 넣고 충분히 쉐이킹해주세요.\n4. 얼음을 넣은 롱드링크 글라스에 부으세요.\n5. 위에 레몬주스 1 oz를 추가하세요.\n6. 나머지는 콜라로 톱업해주세요."
+        };
+        private Font font;
+        private bool ownsFont;
+        private int selected = -1;
+        private int closeFrame = -1;
+        private Vector2 scroll;
+        private CursorLockMode previousLock;
+        private bool previousCursorVisible;
+        private GUIStyle titleStyle;
+        private GUIStyle sectionStyle;
+        private GUIStyle bodyStyle;
+        private GUIStyle buttonStyle;
+        public bool IsOpen => selected >= 0;
+        public bool BlocksInput => IsOpen || closeFrame == Time.frameCount;
+
+        public RecipeCards(BeerGlassPour owner, BoxCollider table)
+        {
+            this.owner = owner;
+            if (table == null) return;
+            Font fallback = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            font = fallback;
+            string[] installed = Font.GetOSInstalledFontNames();
+            foreach (string preferred in new[] { "Apple SD Gothic Neo", "AppleGothic", "Noto Sans CJK KR", "Malgun Gothic", "Arial Unicode MS" })
+            {
+                if (!System.Array.Exists(installed, name => string.Equals(name, preferred, System.StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                Font candidate = Font.CreateDynamicFontFromOSFont(preferred, 22);
+                if (candidate == null) continue;
+                font = candidate;
+                ownsFont = true;
+                break;
+            }
+            Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+            if (shader == null) shader = Shader.Find("Unlit/Color");
+            if (shader == null) return;
+            root = new GameObject("CocktailRecipeNotes_Runtime");
+            UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(root, owner.gameObject.scene);
+            root.transform.position = table.transform.TransformPoint(table.center
+                + Vector3.up * table.size.y * 0.5f) + Vector3.up * 0.004f;
+            root.transform.rotation = table.transform.rotation;
+            Color[] colors = { new Color(1f, 0.93f, 0.63f), new Color(1f, 0.81f, 0.7f), new Color(0.78f, 0.92f, 0.85f) };
+            for (int index = 0; index < 3; index++)
+            {
+                GameObject note = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                note.name = "RecipeNote_" + (index + 1);
+                note.transform.SetParent(root.transform, false);
+                note.transform.localPosition = new Vector3(-1.9f + index * 0.43f, 0f, 0f);
+                // 종이만 얇게 만들고 글씨는 크기가 1인 별도 오브젝트에 둡니다.
+                note.transform.localScale = new Vector3(0.30f, 0.003f, 0.36f);
+                paper[index] = new Material(shader) { color = colors[index] };
+                note.GetComponent<Renderer>().sharedMaterial = paper[index];
+                notes[index] = note;
+                GameObject writing = new GameObject("WrittenRecipeTitle");
+                writing.transform.SetParent(root.transform, false);
+                writing.transform.localPosition = note.transform.localPosition + new Vector3(-0.13f, 0.003f, 0.15f);
+                writing.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+                TextMesh text = writing.AddComponent<TextMesh>();
+                text.font = font;
+                text.fontSize = 48;
+                text.characterSize = 0.022f;
+                text.anchor = TextAnchor.UpperLeft;
+                text.color = new Color(0.12f, 0.18f, 0.2f);
+                text.text = "0" + (index + 1) + "\n" + englishTitles[index] + "\n\nRECIPE\nCLICK TO READ";
+                writing.GetComponent<Renderer>().sharedMaterial = font.material;
+            }
+            root.SetActive(false);
+        }
+
+        public void SetAvailable(bool available)
+        {
+            if (root != null && root.activeSelf != available) root.SetActive(available);
+        }
+
+        public bool HandleInput(bool clicked, out string prompt)
+        {
+            prompt = "";
+            if (root == null || !root.activeInHierarchy || BlocksInput) return false;
+            Ray ray = owner.playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+            if (!Physics.Raycast(ray, out RaycastHit hit, owner.pickupDistance,
+                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) return false;
+            for (int index = 0; index < notes.Length; index++)
+            {
+                if (hit.collider.gameObject != notes[index]) continue;
+                prompt = "LEFT CLICK - Read recipe " + (index + 1);
+                if (clicked)
+                {
+                    previousLock = Cursor.lockState;
+                    previousCursorVisible = Cursor.visible;
+                    selected = index;
+                    scroll = Vector2.zero;
+                    Cursor.lockState = CursorLockMode.None;
+                    Cursor.visible = true;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        public void Close()
+        {
+            if (!IsOpen) return;
+            selected = -1;
+            closeFrame = Time.frameCount;
+            Cursor.lockState = previousLock;
+            Cursor.visible = previousCursorVisible;
+        }
+
+        public void DrawNoteLabels(GUIStyle style)
+        {
+            if (root == null || !root.activeInHierarchy) return;
+            for (int index = 0; index < notes.Length; index++)
+            {
+                Vector3 point = notes[index].transform.position + Vector3.up * 0.06f;
+                if (Vector3.Distance(owner.playerCamera.transform.position, point) > owner.pickupDistance) continue;
+                Vector3 screen = owner.playerCamera.WorldToScreenPoint(point);
+                if (screen.z > 0f)
+                    GUI.Label(new Rect(screen.x - 75f, Screen.height - screen.y - 30f, 150f, 32f),
+                        "RECIPE 0" + (index + 1), style);
+            }
+        }
+
+        public void DrawOverlay()
+        {
+            if (!IsOpen) return;
+            if (bodyStyle == null)
+            {
+                bodyStyle = new GUIStyle(GUI.skin.label) { font = font, fontSize = 20, wordWrap = true };
+                bodyStyle.normal.textColor = new Color(0.13f, 0.19f, 0.2f);
+                titleStyle = new GUIStyle(bodyStyle) { fontSize = 30, fontStyle = FontStyle.Bold };
+                sectionStyle = new GUIStyle(bodyStyle) { fontSize = 22, fontStyle = FontStyle.Bold };
+                buttonStyle = new GUIStyle(GUI.skin.button) { font = font, fontSize = 18 };
+            }
+            Color previousColor = GUI.color;
+            GUI.color = new Color(0f, 0f, 0f, 0.78f);
+            GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), Texture2D.whiteTexture);
+            float width = Mathf.Min(760f, Screen.width - 24f);
+            float height = Mathf.Min(650f, Screen.height - 24f);
+            Rect panel = new Rect((Screen.width - width) * 0.5f, (Screen.height - height) * 0.5f, width, height);
+            GUI.color = new Color(1f, 0.97f, 0.87f);
+            GUI.DrawTexture(panel, Texture2D.whiteTexture);
+            GUI.color = previousColor;
+            GUI.Label(new Rect(panel.x + 26f, panel.y + 18f, width - 52f, 55f), titles[selected], titleStyle);
+            GUI.Label(new Rect(panel.x + 26f, panel.y + 76f, width - 52f, 32f), "레시피 카드 0" + (selected + 1), bodyStyle);
+            GUILayout.BeginArea(new Rect(panel.x + 26f, panel.y + 118f, width - 52f, height - 190f));
+            scroll = GUILayout.BeginScrollView(scroll, false, true);
+            GUILayout.Label("재료", sectionStyle);
+            GUILayout.Label(ingredients[selected], bodyStyle);
+            GUILayout.Space(20f);
+            GUILayout.Label("만드는 방법", sectionStyle);
+            GUILayout.Label(steps[selected], bodyStyle);
+            GUILayout.EndScrollView();
+            GUILayout.EndArea();
+            if (GUI.Button(new Rect(panel.x + width - 166f, panel.yMax - 58f, 140f, 40f), "닫기 (Esc)", buttonStyle))
+                Close();
+        }
+
+        public void Dispose()
+        {
+            Close();
+            if (root != null) UnityEngine.Object.Destroy(root);
+            foreach (Material material in paper)
+                if (material != null) UnityEngine.Object.Destroy(material);
+            if (ownsFont && font != null) UnityEngine.Object.Destroy(font);
         }
     }
 

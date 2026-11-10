@@ -12,6 +12,7 @@ public class BarPlayerMovement : MonoBehaviour
 
     private CharacterController controller;
     private UniformInteraction uniform;
+    private BeerGlassPour beerInteraction;
     private Transform view;
     private float pitch;
     private float verticalSpeed;
@@ -24,6 +25,7 @@ public class BarPlayerMovement : MonoBehaviour
     {
         controller = GetComponent<CharacterController>();
         uniform = GetComponent<UniformInteraction>();
+        beerInteraction = GetComponent<BeerGlassPour>();
         // 시작 안내로 이동이 비활성화되어도 양쪽 스테이지의 벽은 미리 만듭니다.
         CreateActivityWalls();
     }
@@ -85,7 +87,8 @@ public class BarPlayerMovement : MonoBehaviour
 #endif
 
         // 안내 중에는 이동/시점/클릭 입력을 버리되 기존 중력 처리는 유지합니다.
-        if (uniform != null && uniform.IsGuidePlaying)
+        if ((uniform != null && uniform.IsGuidePlaying)
+            || (beerInteraction != null && beerInteraction.IsRecipeOpen))
         {
             movement = Vector2.zero;
             look = Vector2.zero;
