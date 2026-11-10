@@ -102,11 +102,20 @@ while true; do
             fi
         done
         rm -f "$state/verify.cs"
-        echo "적용 확인 완료: $project (main $revision)"
+        echo "$(date '+%H:%M:%S') 적용 확인 완료: $project (main ${revision:0:7})"
+        if /usr/bin/grep -q 'private sealed class CocktailPractice' "$project/Assets/Script/BeerGlassPour.cs" \
+            && /usr/bin/grep -q 'Start to make' "$project/Assets/Script/BeerGlassPour.cs"; then
+            echo '연습 스테이지 코드 확인: Start to make / 45 seconds'
+        fi
         echo 'Unity의 컴파일이 끝난 뒤 Play를 다시 시작하세요. 이 터미널은 열어 두세요.'
     else
-        echo '동기화가 중단됐습니다. 위 오류가 해결되기 전에는 적용 완료가 아닙니다.'
-        exit 1
+        result=$?
+        if [ "$result" = 2 ]; then
+            echo '로컬 편집을 보존하기 위해 멈췄습니다. 위 파일은 덮어쓰지 않았습니다.'
+            exit 2
+        fi
+        echo "이번 갱신은 실패했습니다 (code $result). 적용 완료가 아닙니다."
+        echo '터미널을 유지하고 60초 뒤 자동 재시도합니다.'
     fi
     sleep 60
 done
