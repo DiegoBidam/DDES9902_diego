@@ -1,5 +1,11 @@
 # Mac 코드 자동 동기화
 
+## 현재 Unity 프로젝트에 직접 적용
+
+Unity에서 Play를 중지하고 `Open Project Sync.command`를 Terminal에서 실행합니다. Unity 프로세스의 `-projectPath`로 실제 열린 프로젝트를 찾고, 찾을 수 없거나 여러 개면 폴더 선택을 요청합니다. 이전 launchd 작업은 해제하고 프로젝트 이동 없이 Terminal에서 60초마다 동기화합니다. macOS가 Terminal의 Documents 접근을 요청하면 해당 폴더 접근을 허용해야 합니다. 전체 디스크 접근 권한은 요구하지 않습니다.
+
+변경 전 스크립트 5개를 별도로 백업합니다. 원격 커밋 이력의 알려진 버전만 갱신하며 별도 로컬 편집은 중단합니다. 각 적용 후 원격 파일과 로컬 파일을 실제 비교한 뒤 `적용 확인 완료`를 출력합니다. 이 터미널을 닫거나 Control+C를 누르면 자동화가 멈춥니다. 재로그인 후에는 이 파일을 다시 실행해야 합니다. 기존 launchd 방식을 대체하는 명시적 실행 방식입니다.
+
 ## Documents 접근 거부 복구
 
 `Operation not permitted`가 Documents 아래 프로젝트를 가리키면 Unity Editor를 종료하고 `Repair Auto Sync.command`를 실행합니다. 원본은 유지하고 `~/UnityProjects`에 캐시를 제외한 사본을 만들며, 동기화 경로를 사본으로 변경합니다. 이후 Unity Hub에서 출력된 새 경로를 열어야 합니다. 원본 Documents 프로젝트는 더 이상 자동화 대상이 아닙니다. 복구 도구는 백그라운드 작업의 성공 기록까지 확인한 뒤에만 성공을 표시합니다. 전체 디스크 접근 권한을 설정하지 않습니다.

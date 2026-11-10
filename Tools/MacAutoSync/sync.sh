@@ -5,7 +5,10 @@ project=$1
 state=$2
 remote=$3
 mkdir -p "$state"
-if ! mkdir "$state/lock" 2>/dev/null; then exit 0; fi
+if ! mkdir "$state/lock" 2>/dev/null; then
+    echo 'Sync lock exists; no update was performed.' >&2
+    exit 75
+fi
 trap 'rm -rf "$state/lock"' EXIT
 export GIT_TERMINAL_PROMPT=0
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes -oConnectTimeout=15}"
