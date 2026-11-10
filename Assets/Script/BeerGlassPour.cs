@@ -974,7 +974,7 @@ public class BeerGlassPour : MonoBehaviour
             savedCamera = owner.playerCamera.enabled;
             savedCursor = Cursor.lockState;
             savedCursorVisible = Cursor.visible;
-            scene = UnityEngine.SceneManagement.SceneManager.CreateScene("CocktailPractice_" + owner.GetInstanceID() + "_" + Time.frameCount);
+            scene = UnityEngine.SceneManagement.SceneManager.CreateScene("CocktailPractice_" + System.Guid.NewGuid().ToString("N"));
             root = new GameObject("CocktailPractice_Runtime");
             UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(root, scene);
             root.transform.position = origin;
