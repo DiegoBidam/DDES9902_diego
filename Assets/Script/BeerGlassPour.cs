@@ -42,6 +42,7 @@ public class BeerGlassPour : MonoBehaviour
     private readonly bool[] served = new bool[2];
     private GameObject serviceMarker;
     private BoxCollider serviceDesk;
+    private CocktailEquipment cocktailEquipment;
     private readonly LineRenderer[] serviceRings = new LineRenderer[2];
     private Material markerMaterial;
     private Material completedMaterial;
@@ -78,6 +79,7 @@ public class BeerGlassPour : MonoBehaviour
 
         CreateBeerStream();
         CreateServiceMarker();
+        cocktailEquipment = new CocktailEquipment(this);
     }
 
     void Update()
@@ -96,7 +98,17 @@ public class BeerGlassPour : MonoBehaviour
                 if (ring != null) ring.widthMultiplier = width;
         }
 
-        if (TaskCompleted || Cursor.lockState != CursorLockMode.Locked)
+        if (Cursor.lockState != CursorLockMode.Locked)
+            return;
+
+        if (heldGlass == null && cocktailEquipment != null
+            && cocktailEquipment.HandleInput(PressedLeftClick(), out string equipmentPrompt))
+        {
+            prompt = equipmentPrompt;
+            return;
+        }
+
+        if (TaskCompleted)
             return;
 
         if (pouring)
@@ -512,6 +524,7 @@ public class BeerGlassPour : MonoBehaviour
 
     void OnDestroy()
     {
+        if (cocktailEquipment != null) cocktailEquipment.Dispose();
         if (serviceMarker != null) Destroy(serviceMarker);
         if (beerStream != null) Destroy(beerStream);
         if (holdPoint != null) Destroy(holdPoint.gameObject);
@@ -566,8 +579,10 @@ public class BeerGlassPour : MonoBehaviour
             : "SERVE TWO BEERS  " + count + "/2\nSchooner: " + GlassStatus(0) + "   Pint: " + GlassStatus(1), textStyle);
 
         string instruction;
-        if (TaskCompleted)
-            instruction = "TASK COMPLETE! Both beers served.";
+        if (cocktailEquipment != null && cocktailEquipment.IsHolding)
+            instruction = "COCKTAIL TOOLS: " + cocktailEquipment.HeldName + "\nLEFT CLICK to put it back on the table";
+        else if (TaskCompleted)
+            instruction = "BEER TASK COMPLETE! Explore the cocktail tools on the rear table.";
         else if (pouring)
             instruction = "2. POURING BEER...";
         else if (heldGlass == null)
@@ -580,7 +595,9 @@ public class BeerGlassPour : MonoBehaviour
         float panelWidth = Mathf.Min(650f, Screen.width - 30f);
         Rect instructionArea = new Rect((Screen.width - panelWidth) * 0.5f, 130f, panelWidth, 85f);
         GUI.Box(instructionArea, "");
-        GUI.Label(instructionArea, "PICK UP > POUR > SERVE\n" + instruction, textStyle);
+        bool cocktailFocus = TaskCompleted || (cocktailEquipment != null && cocktailEquipment.IsHolding);
+        GUI.Label(instructionArea, (cocktailFocus ? "COCKTAIL STATION\n" : "PICK UP > POUR > SERVE\n") + instruction, textStyle);
+        if (cocktailEquipment != null) cocktailEquipment.DrawLabels(textStyle);
 
         if (serviceMarker != null && serviceMarker.activeInHierarchy)
         {
@@ -617,6 +634,229 @@ public class BeerGlassPour : MonoBehaviour
     string GlassStatus(int index)
     {
         return served[index] ? "SERVED" : filled[index] ? "READY" : "EMPTY";
+    }
+
+    // 동기화 대상인 이 파일에 포함해 새 씬/프리팹/Inspector 연결 없이 장비를 만듭니다.
+    private sealed class CocktailEquipment
+    {
+        private readonly BeerGlassPour owner;
+        private GameObject root;
+        private readonly GameObject[] tools = new GameObject[3];
+        private readonly Vector3[] slots = new Vector3[3];
+        private readonly string[] names = { "Large shaker tin", "Small shaker tin", "Jigger: 1 oz / 0.5 oz" };
+        private readonly float[] heights = { 0.27f, 0.20f, 0.115f };
+        private readonly System.Collections.Generic.List<Mesh> meshes = new System.Collections.Generic.List<Mesh>();
+        private Material steel;
+        private Material rubber;
+        private int held = -1;
+        public bool IsHolding => held >= 0;
+        public string HeldName => IsHolding ? names[held] : "";
+
+        public CocktailEquipment(BeerGlassPour owner)
+        {
+            this.owner = owner;
+            BoxCollider table = null;
+            foreach (GameObject sceneRoot in owner.gameObject.scene.GetRootGameObjects())
+            {
+                foreach (BoxCollider collider in sceneRoot.GetComponentsInChildren<BoxCollider>())
+                {
+                    if (collider.gameObject.activeInHierarchy && collider.name == "GlassTable_Top")
+                    {
+                        table = collider;
+                        break;
+                    }
+                }
+                if (table != null) break;
+            }
+            if (table == null)
+            {
+                Debug.LogError("CocktailEquipment: 뒤쪽 GlassTable_Top 테이블을 찾지 못했습니다.");
+                return;
+            }
+            Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+            if (shader == null) shader = Shader.Find("Standard");
+            if (shader == null)
+            {
+                Debug.LogError("CocktailEquipment: 금속 재질용 셰이더를 찾지 못했습니다.");
+                return;
+            }
+            steel = new Material(shader) { color = new Color(0.72f, 0.78f, 0.82f) };
+            steel.SetFloat("_Metallic", 0.85f);
+            steel.SetFloat("_Smoothness", 0.78f);
+            rubber = new Material(shader) { color = new Color(0.025f, 0.045f, 0.05f) };
+            rubber.SetFloat("_Smoothness", 0.2f);
+
+            root = new GameObject("CocktailEquipment_Runtime");
+            UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(root, owner.gameObject.scene);
+            root.transform.position = table.transform.TransformPoint(table.center
+                + new Vector3(0f, table.size.y * 0.5f, -table.size.z * 0.12f)) + Vector3.up * 0.012f;
+            root.transform.rotation = table.transform.rotation;
+            GameObject mat = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            mat.name = "Cocktail_BarMat";
+            mat.transform.SetParent(root.transform, false);
+            mat.transform.localPosition = new Vector3(0f, -0.006f, 0f);
+            mat.transform.localScale = new Vector3(1.65f, 0.012f, 0.42f);
+            mat.GetComponent<Renderer>().sharedMaterial = rubber;
+            Collider matCollider = mat.GetComponent<Collider>();
+            matCollider.enabled = false;
+            UnityEngine.Object.Destroy(matCollider);
+
+            CreateTin(0, 0.041f, 0.055f);
+            CreateTin(1, 0.034f, 0.047f);
+            CreateJigger();
+        }
+
+        private GameObject CreateTool(int index, string objectName, float diameter)
+        {
+            GameObject tool = new GameObject(objectName);
+            tool.transform.SetParent(root.transform, false);
+            slots[index] = new Vector3((index - 1) * 0.48f, 0f, 0f);
+            tool.transform.localPosition = slots[index];
+            BoxCollider collider = tool.AddComponent<BoxCollider>();
+            collider.center = Vector3.up * heights[index] * 0.5f;
+            collider.size = new Vector3(diameter, heights[index], diameter);
+            tools[index] = tool;
+            return tool;
+        }
+
+        private void CreateTin(int index, float bottomRadius, float topRadius)
+        {
+            float height = heights[index];
+            GameObject tool = CreateTool(index, index == 0 ? "Shaker_LargeTin" : "Shaker_SmallTin", topRadius * 2f);
+            // 외벽 → 둥근 테두리 → 내벽 → 바닥으로 이어지는 열린 컵입니다.
+            Vector2[] profile = {
+                new Vector2(0f, 0f), new Vector2(bottomRadius, 0f),
+                new Vector2(bottomRadius + 0.002f, 0.012f),
+                new Vector2(topRadius - 0.001f, height - 0.008f),
+                new Vector2(topRadius, height - 0.003f), new Vector2(topRadius, height),
+                new Vector2(topRadius - 0.003f, height),
+                new Vector2(bottomRadius - 0.001f, 0.008f),
+                new Vector2(0f, 0.006f), new Vector2(0f, 0f)
+            };
+            AddLathedMesh(tool.transform, "HollowStainlessTin", profile);
+        }
+
+        private void CreateJigger()
+        {
+            GameObject tool = CreateTool(2, "Jigger_1oz_0.5oz", 0.076f);
+            GameObject large = new GameObject("Cup_1oz");
+            large.transform.SetParent(tool.transform, false);
+            large.transform.localPosition = new Vector3(0f, 0.05f, 0f);
+            AddLathedMesh(large.transform, "OneOunceCup", new[] {
+                new Vector2(0f, 0f), new Vector2(0.012f, 0f),
+                new Vector2(0.018f, 0.012f), new Vector2(0.036f, 0.061f),
+                new Vector2(0.036f, 0.065f), new Vector2(0.033f, 0.065f),
+                new Vector2(0.015f, 0.013f), new Vector2(0f, 0.006f), new Vector2(0f, 0f)
+            });
+            GameObject small = new GameObject("Cup_0.5oz");
+            small.transform.SetParent(tool.transform, false);
+            small.transform.localPosition = new Vector3(0f, 0.05f, 0f);
+            small.transform.localRotation = Quaternion.Euler(180f, 0f, 0f);
+            AddLathedMesh(small.transform, "HalfOunceCup", new[] {
+                new Vector2(0f, 0f), new Vector2(0.012f, 0f),
+                new Vector2(0.028f, 0.046f), new Vector2(0.028f, 0.05f),
+                new Vector2(0.025f, 0.05f), new Vector2(0.009f, 0.009f),
+                new Vector2(0f, 0.006f), new Vector2(0f, 0f)
+            });
+        }
+
+        private void AddLathedMesh(Transform parent, string name, Vector2[] profile)
+        {
+            const int segments = 64;
+            Vector3[] vertices = new Vector3[profile.Length * (segments + 1)];
+            int[] triangles = new int[(profile.Length - 1) * segments * 6];
+            int triangle = 0;
+            for (int row = 0; row < profile.Length; row++)
+            {
+                for (int segment = 0; segment <= segments; segment++)
+                {
+                    float angle = segment * Mathf.PI * 2f / segments;
+                    int vertex = row * (segments + 1) + segment;
+                    vertices[vertex] = new Vector3(Mathf.Cos(angle) * profile[row].x,
+                        profile[row].y, Mathf.Sin(angle) * profile[row].x);
+                    if (row == profile.Length - 1 || segment == segments) continue;
+                    int next = vertex + segments + 1;
+                    triangles[triangle++] = vertex;
+                    triangles[triangle++] = next;
+                    triangles[triangle++] = next + 1;
+                    triangles[triangle++] = vertex;
+                    triangles[triangle++] = next + 1;
+                    triangles[triangle++] = vertex + 1;
+                }
+            }
+            Mesh mesh = new Mesh { name = name };
+            mesh.vertices = vertices;
+            mesh.triangles = triangles;
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            meshes.Add(mesh);
+            GameObject surface = new GameObject(name);
+            surface.transform.SetParent(parent, false);
+            surface.AddComponent<MeshFilter>().sharedMesh = mesh;
+            surface.AddComponent<MeshRenderer>().sharedMaterial = steel;
+        }
+
+        public bool HandleInput(bool clicked, out string prompt)
+        {
+            prompt = "";
+            if (root == null) return false;
+            if (IsHolding)
+            {
+                prompt = "LEFT CLICK - Put " + names[held] + " back on the table";
+                if (clicked)
+                {
+                    Transform tool = tools[held].transform;
+                    tool.SetParent(root.transform, false);
+                    tool.localPosition = slots[held];
+                    tool.localRotation = Quaternion.identity;
+                    tool.GetComponent<Collider>().enabled = true;
+                    held = -1;
+                }
+                return true;
+            }
+            Ray ray = owner.playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+            if (!Physics.Raycast(ray, out RaycastHit hit, owner.pickupDistance,
+                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) return false;
+            for (int index = 0; index < tools.Length; index++)
+            {
+                if (tools[index] == null || !hit.transform.IsChildOf(tools[index].transform)) continue;
+                prompt = "LEFT CLICK - Pick up " + names[index];
+                if (clicked)
+                {
+                    held = index;
+                    Transform tool = tools[index].transform;
+                    tool.GetComponent<Collider>().enabled = false;
+                    tool.SetParent(owner.playerCamera.transform, false);
+                    tool.localPosition = new Vector3(0.24f, -0.3f, 0.65f);
+                    tool.localRotation = Quaternion.Euler(-12f, 0f, 0f);
+                }
+                return true;
+            }
+            return false;
+        }
+
+        public void DrawLabels(GUIStyle style)
+        {
+            if (root == null) return;
+            for (int index = 0; index < tools.Length; index++)
+            {
+                if (tools[index] == null || held == index) continue;
+                Vector3 point = tools[index].transform.position + Vector3.up * (heights[index] + 0.06f);
+                if (Vector3.Distance(owner.playerCamera.transform.position, point) > 3.5f) continue;
+                Vector3 screen = owner.playerCamera.WorldToScreenPoint(point);
+                if (screen.z <= 0f) continue;
+                GUI.Label(new Rect(screen.x - 115f, Screen.height - screen.y - 20f, 230f, 45f), names[index], style);
+            }
+        }
+
+        public void Dispose()
+        {
+            if (IsHolding && tools[held] != null) UnityEngine.Object.Destroy(tools[held]);
+            if (root != null) UnityEngine.Object.Destroy(root);
+            foreach (Mesh mesh in meshes) UnityEngine.Object.Destroy(mesh);
+            if (steel != null) UnityEngine.Object.Destroy(steel);
+            if (rubber != null) UnityEngine.Object.Destroy(rubber);
+        }
     }
 
 }
