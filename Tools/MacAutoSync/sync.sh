@@ -10,7 +10,14 @@ trap 'rm -rf "$state/lock"' EXIT
 export GIT_TERMINAL_PROMPT=0
 export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -oBatchMode=yes -oConnectTimeout=15}"
 files=("Bar intro.cs" "BarPlayerMovement.cs" "BeerGlassPour.cs" "EntranceGuide.cs" "UniformInteraction.cs")
-hash() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
+hash() {
+    local output
+    if ! output=$(/usr/bin/shasum -a 256 "$1"); then
+        echo "Cannot read project file: $1. If macOS denies Documents access, run Repair Auto Sync.command." >&2
+        return 1
+    fi
+    printf '%s\n' "${output%% *}"
+}
 cache="$state/cache.git"
 if [ ! -d "$cache" ]; then
     /usr/bin/git init --bare --quiet "$cache"
@@ -63,3 +70,5 @@ for index in "${!files[@]}"; do
 done
 if [ "$changed" = 1 ]; then echo "$(date): Synced five scripts from main ($revision)."; fi
 printf '%s\n' "$revision" > "$state/last-revision.txt"
+date +%s > "$state/last-success.txt"
+echo "$(date): Checked main ($revision). Project: $project"

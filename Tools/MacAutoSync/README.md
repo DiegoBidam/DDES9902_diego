@@ -1,5 +1,11 @@
 # Mac 코드 자동 동기화
 
+## Documents 접근 거부 복구
+
+`Operation not permitted`가 Documents 아래 프로젝트를 가리키면 Unity Editor를 종료하고 `Repair Auto Sync.command`를 실행합니다. 원본은 유지하고 `~/UnityProjects`에 캐시를 제외한 사본을 만들며, 동기화 경로를 사본으로 변경합니다. 이후 Unity Hub에서 출력된 새 경로를 열어야 합니다. 원본 Documents 프로젝트는 더 이상 자동화 대상이 아닙니다. 복구 도구는 백그라운드 작업의 성공 기록까지 확인한 뒤에만 성공을 표시합니다. 전체 디스크 접근 권한을 설정하지 않습니다.
+
+신규 설치 시에도 `~/UnityProjects` 아래 프로젝트를 사용합니다. Documents, Desktop, Downloads, iCloud Documents는 백그라운드 접근 제한 때문에 거부합니다. macOS 보호 폴더의 원본을 읽기 위해 Terminal이 폴더 접근 허용을 요청할 수 있습니다.
+
 `Install Auto Sync.command`를 Mac에서 한 번 실행하고, 실제로 Unity에서 사용하는 프로젝트 폴더를 선택합니다. 다운로드한 ZIP 안의 새 프로젝트를 선택할 필요는 없습니다. 기존 프로젝트를 선택하면 됩니다. 설치 중 최신 main의 스크립트 5개를 적용하고, 이후 로그인 시 및 60초마다 확인합니다. GitHub main은 GitHub에서 즉시 보이지만 Mac 동기화는 이 최초 설치 후에만 작동합니다.
 
 대상은 Assets/Script의 `Bar intro.cs`, `BarPlayerMovement.cs`, `BeerGlassPour.cs`, `EntranceGuide.cs`, `UniformInteraction.cs`입니다. 씬, 프리팹, .meta, 패키지와 그 외 파일은 변경하지 않습니다. .git이 없는 ZIP 프로젝트도 지원합니다. 대상 프로젝트의 Git 브랜치나 커밋 기록은 변경하지 않습니다.
