@@ -926,8 +926,13 @@ public class BeerGlassPour : MonoBehaviour
         private readonly string[] recipeNames = { "Gin & Tonic", "Negroni", "Long Island Iced Tea" };
         private readonly string[] glassNames = { "Rocks glass", "Old-fashioned glass", "Long-drink glass" };
         private readonly string[] ingredientNames = { "Rum", "Gin", "Vodka", "Triple sec", "Campari", "Tonic water", "Ice", "Cola", "Lemon juice", "Sweet vermouth" };
-        private readonly int[][] buildOrders = { new[] { 1, 5, 6 }, new[] { 9, 1, 4, 6 }, new[] { 0, 1, 2, 3, 6 } };
-        private readonly float[][] buildMeasures = { new[] { 1f, 0f, 0f }, new[] { 1f, 1f, 1f, 0f }, new[] { 0.5f, 0.5f, 0.5f, 0.5f, 0f } };
+        private readonly int[][] recipeIngredients = { new[] { 1, 5, 6 }, new[] { 9, 1, 4, 6 }, new[] { 0, 1, 2, 3, 6, 8, 7 } };
+        private readonly float[][] recipeAmounts = { new[] { 1f, 0f, 0f }, new[] { 1f, 1f, 1f, 0f }, new[] { 0.5f, 0.5f, 0.5f, 0.5f, 0f, 1f, 0f } };
+        private readonly float[] ingredientTotals = new float[10];
+        private readonly bool[] included = new bool[10];
+        private bool shakerIced, glassIced, stirred, shaken, transferred;
+        private string feedback = "";
+        private float feedbackUntil;
         private readonly float[] glassHeights = { 0.16f, 0.20f, 0.32f };
         private readonly Color ink = new Color(0.89f, 0.94f, 0.92f);
         private readonly Color panelColor = new Color(0.035f, 0.085f, 0.09f, 0.94f);
@@ -952,7 +957,7 @@ public class BeerGlassPour : MonoBehaviour
         private Material steel, glass, ice, liquid, mat, white, labelPaper, spoonMetal;
         private Font labelFont;
         private Phase phase;
-        private int selectedGlass, ingredientStep, strokes, travelDirection, lastStrokeDirection, toolPickedFrame;
+        private int selectedGlass, strokes, travelDirection, lastStrokeDirection, toolPickedFrame;
         private int hovered = -1;
         private float remaining, measure = 1f, travel, toolOffset;
         private bool failed, completed, toolHeld, pouring, released;
@@ -1224,39 +1229,71 @@ public class BeerGlassPour : MonoBehaviour
             foreach (GameObject ring in rings) ring.SetActive(false);
             ReturnTool();
             shakerLid.SetActive(false);
-            phase = Phase.ChooseGlass; selectedGlass = -1; ingredientStep = 0;
+            phase = Phase.ChooseGlass; selectedGlass = -1;
+            System.Array.Clear(ingredientTotals, 0, ingredientTotals.Length);
+            System.Array.Clear(included, 0, included.Length);
+            shakerIced = false; glassIced = false; stirred = false; shaken = false; transferred = false;
+            feedback = ""; feedbackUntil = 0f;
             strokes = 0; travel = 0f; travelDirection = 0; lastStrokeDirection = 0;
             failed = false; completed = false; error = ""; measure = 1f; remaining = RoundSeconds;
             hovered = -1;
         }
 
-        private int ExpectedIngredient()
+        private float RequiredAmount(int ingredient)
         {
-            if (phase == Phase.Build) return buildOrders[recipe][ingredientStep];
-            if (phase == Phase.GlassIce) return 6;
-            if (phase == Phase.TopUp) return ingredientStep == 0 ? 8 : 7;
-            return -1;
+            int index = System.Array.IndexOf(recipeIngredients[recipe], ingredient);
+            return index < 0 ? -1f : recipeAmounts[recipe][index];
         }
 
-        private float ExpectedMeasure()
+        private bool NeedsIngredient(int ingredient)
         {
-            if (phase == Phase.Build) return buildMeasures[recipe][ingredientStep];
-            return phase == Phase.TopUp && ingredientStep == 0 ? 1f : 0f;
+            float required = RequiredAmount(ingredient);
+            if (required < 0f) return false;
+            if (ingredient == 6 && recipe == 2) return !shakerIced || !glassIced;
+            return required > 0f ? ingredientTotals[ingredient] < required - 0.001f : !included[ingredient];
+        }
+
+        private bool AllIngredientsReady()
+        {
+            foreach (int ingredient in recipeIngredients[recipe])
+                if (NeedsIngredient(ingredient)) return false;
+            return true;
+        }
+
+        private bool ShakerReady()
+        {
+            return shakerIced && ingredientTotals[0] >= 0.499f && ingredientTotals[1] >= 0.499f
+                && ingredientTotals[2] >= 0.499f && ingredientTotals[3] >= 0.499f;
+        }
+
+        private void RefreshPhase()
+        {
+            if (selectedGlass < 0) { phase = Phase.ChooseGlass; return; }
+            if (recipe == 0) phase = AllIngredientsReady() ? Phase.Ready : Phase.Build;
+            else if (recipe == 1) phase = !AllIngredientsReady() ? Phase.Build : stirred ? Phase.Ready : Phase.Stir;
+            else
+            {
+                if (!ShakerReady()) phase = Phase.Build;
+                else if (!shaken) phase = Phase.Shake;
+                else if (!glassIced) phase = Phase.GlassIce;
+                else if (!transferred) phase = Phase.Transfer;
+                else phase = AllIngredientsReady() ? Phase.Ready : Phase.TopUp;
+                shakerLid.SetActive(ShakerReady() && !transferred);
+            }
         }
 
         private string NextInstruction()
         {
+            if (Time.unscaledTime < feedbackUntil) return feedback;
             switch (phase)
             {
                 case Phase.ChooseGlass: return "Choose the " + glassNames[recipe] + ".";
-                case Phase.Stir: return toolHeld ? "Hold LEFT CLICK and move LEFT / RIGHT. Complete 15 round trips." : "Click the stirring stick to pick it up.";
-                case Phase.Shake: return toolHeld ? "Hold LEFT CLICK and move UP / DOWN. Complete 15 round trips." : "Click the shaker to pick it up.";
+                case Phase.Stir: return toolHeld ? "Hold LEFT CLICK and move LEFT / RIGHT. Complete 15 round trips." : "Ingredients complete. Click the stirring stick.";
+                case Phase.Shake: return toolHeld ? "Hold LEFT CLICK and move UP / DOWN. Complete 15 round trips." : "Shaker ready. Click it to shake; other ingredients can be added in any order.";
+                case Phase.GlassIce: return "Click Ice to add ice to your serving glass.";
                 case Phase.Transfer: return "Click the shaker to pour into the iced long-drink glass.";
                 case Phase.Ready: return "Your cocktail is ready. Click FINISH.";
-                default:
-                    int ingredient = ExpectedIngredient();
-                    string amount = ExpectedMeasure() > 0f ? ExpectedMeasure().ToString("0.#") + " oz of " : "";
-                    return "Click " + amount + ingredientNames[ingredient] + (phase == Phase.Build && recipe == 2 ? " to add it to the shaker." : " to add it to your glass.");
+                default: return "Add the required ingredients in ANY ORDER. Match the totals shown on each label.";
             }
         }
 
@@ -1265,41 +1302,39 @@ public class BeerGlassPour : MonoBehaviour
             error = message; failed = true; StopPour(false); ReturnTool();
         }
 
-        private void AdvanceIngredient()
-        {
-            if (phase == Phase.GlassIce) { phase = Phase.Transfer; return; }
-            if (phase == Phase.TopUp)
-            {
-                ingredientStep++;
-                if (ingredientStep == 2) phase = Phase.Ready;
-                return;
-            }
-            ingredientStep++;
-            if (ingredientStep == buildOrders[recipe].Length)
-            {
-                phase = recipe == 0 ? Phase.Ready : recipe == 1 ? Phase.Stir : Phase.Shake;
-                if (phase == Phase.Shake) shakerLid.SetActive(true);
-            }
-        }
-
         private void AddIngredient(int ingredient)
         {
-            if (phase == Phase.ChooseGlass) { Fail("Choose the correct glass before adding ingredients."); return; }
-            int expected = ExpectedIngredient();
-            if (expected < 0) { Fail("That ingredient is not allowed at this step.\n" + NextInstruction()); return; }
-            if (ingredient != expected)
+            if (selectedGlass < 0) { Fail("Choose the correct glass before adding ingredients."); return; }
+            float required = RequiredAmount(ingredient);
+            if (required < 0f)
             {
-                Fail("Incorrect ingredient or order.\nExpected: " + ingredientNames[expected] + ".\nYou chose: " + ingredientNames[ingredient] + "."); return;
+                Fail("Incorrect ingredient.\n" + ingredientNames[ingredient] + " is not used in " + recipeNames[recipe] + "."); return;
             }
-            float required = ExpectedMeasure();
-            if (required > 0f && !Mathf.Approximately(measure, required))
+            if (required == 0f && !NeedsIngredient(ingredient))
             {
-                Fail("Incorrect measure.\nUse " + required.ToString("0.#") + " oz for " + ingredientNames[ingredient] + "."); return;
+                feedback = ingredientNames[ingredient] + " is already added. No extra amount was added.";
+                feedbackUntil = Time.unscaledTime + 2f;
+                return;
             }
-            GameObject vessel = phase == Phase.Build && recipe == 2 ? shaker : glassObjects[selectedGlass];
-            if (ingredient == 6) AddIce(vessel);
-            else BeginPour(targets[10 + ingredient], vessel, ingredientMaterials[ingredient], ingredient == 5 || ingredient == 7 ? 0.07f : 0.028f);
-            AdvanceIngredient();
+            if (required > 0f && ingredientTotals[ingredient] + measure > required + 0.001f)
+            {
+                Fail("Too much " + ingredientNames[ingredient] + ".\nRequired total: " + required.ToString("0.#")
+                    + " oz. Already added: " + ingredientTotals[ingredient].ToString("0.#") + " oz."); return;
+            }
+            if (ingredient == 6)
+            {
+                if (recipe == 2 && !shakerIced) { AddIce(shaker); shakerIced = true; }
+                else { AddIce(glassObjects[selectedGlass]); glassIced = true; }
+            }
+            else
+            {
+                GameObject vessel = recipe == 2 && ingredient >= 0 && ingredient <= 3 ? shaker : glassObjects[selectedGlass];
+                float boost = required > 0f ? 0.028f * measure / required : 0.07f;
+                BeginPour(targets[10 + ingredient], vessel, ingredientMaterials[ingredient], boost);
+                if (required > 0f) ingredientTotals[ingredient] += measure;
+            }
+            included[ingredient] = true;
+            RefreshPhase();
         }
 
         private void AddIce(GameObject vessel)
@@ -1367,7 +1402,7 @@ public class BeerGlassPour : MonoBehaviour
             {
                 shakerLid.SetActive(false);
                 BeginPour(shaker, glassObjects[selectedGlass], liquid, 0.15f);
-                phase = Phase.TopUp; ingredientStep = 0; return;
+                transferred = true; RefreshPhase(); return;
             }
             if ((phase == Phase.Stir && code == 30) || (phase == Phase.Shake && code == 31))
             {
@@ -1400,8 +1435,10 @@ public class BeerGlassPour : MonoBehaviour
             lastStrokeDirection = direction; travel = 0f; strokes++;
             if (strokes >= 30)
             {
+                bool wasStirring = phase == Phase.Stir;
                 ReturnTool();
-                phase = phase == Phase.Stir ? Phase.Ready : Phase.GlassIce;
+                if (wasStirring) stirred = true; else shaken = true;
+                RefreshPhase();
             }
         }
 
@@ -1454,7 +1491,16 @@ public class BeerGlassPour : MonoBehaviour
         private string TargetName(int code)
         {
             if (code < 3) return glassNames[code];
-            if (code < 20) return (code - 9).ToString("00") + "  " + ingredientNames[code - 10];
+            if (code < 20)
+            {
+                int ingredient = code - 10;
+                float required = RequiredAmount(ingredient);
+                string status = required < 0f ? "Not in recipe" : required > 0f
+                    ? ingredientTotals[ingredient].ToString("0.#") + " / " + required.ToString("0.#") + " oz"
+                    : ingredient == 6 && recipe == 2 ? ((shakerIced ? 1 : 0) + (glassIced ? 1 : 0)) + " / 2 containers"
+                    : included[ingredient] ? "ADDED" : ingredient == 6 ? "ADD ICE" : "TOP UP";
+                return (code - 9).ToString("00") + "  " + ingredientNames[ingredient] + "\n" + status;
+            }
             if (code == 30) return phase == Phase.Stir && !toolHeld ? "STIRRING STICK\nCLICK TO PICK UP" : "Stirring stick";
             return "Shaker";
         }
@@ -1557,7 +1603,7 @@ public class BeerGlassPour : MonoBehaviour
             foreach (int code in targets.Keys)
             {
                 Rect rect = LabelRect(code);
-                bool expected = (phase == Phase.ChooseGlass && code == recipe) || (ExpectedIngredient() >= 0 && code == 10 + ExpectedIngredient())
+                bool expected = (phase == Phase.ChooseGlass && code == recipe) || (code >= 10 && code < 20 && NeedsIngredient(code - 10))
                     || (phase == Phase.Stir && code == 30) || ((phase == Phase.Shake || phase == Phase.Transfer) && code == 31);
                 Fill(rect, code == hovered ? new Color(0.2f, 0.4f, 0.32f, 0.95f) : new Color(0.03f, 0.08f, 0.08f, 0.86f));
                 if (code >= 10 && code < 20) Fill(new Rect(rect.x, rect.y, 3f, rect.height), ingredientMaterials[code - 10].color);
@@ -1581,7 +1627,7 @@ public class BeerGlassPour : MonoBehaviour
             }
             if (phase != Phase.Stir && phase != Phase.Shake && phase != Phase.Ready)
                 GUI.Label(new Rect(334f, Screen.height - 102f, Mathf.Max(200f, Screen.width - 350f), 82f),
-                    "Click a glass, then choose a jigger measure.\nClick a bottle or its ingredient label to add it.\nESC returns to the bar.", smallStyle);
+                    "Click bottles or their labels. ANY ORDER is allowed.\nMeasured amounts add up: 0.5 + 0.5 = 1 oz.\nESC returns to the bar.", smallStyle);
             if (phase == Phase.Ready && !pouring && GUI.Button(FinishButton(), "FINISH", buttonStyle)) completed = true;
         }
         public void Dispose()
