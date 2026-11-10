@@ -38,6 +38,17 @@ public class BeerGlassPour : MonoBehaviour
 
     private GameObject beerStream;
     private bool pouring;
+    private readonly bool[] filled = new bool[2];
+    private readonly bool[] served = new bool[2];
+    private GameObject serviceMarker;
+    private readonly LineRenderer[] serviceRings = new LineRenderer[2];
+    private Material markerMaterial;
+    private Material completedMaterial;
+    private Material liquidMaterial;
+    private Material foamMaterial;
+    private Material streamMaterial;
+    private readonly GameObject[] filledVisuals = new GameObject[2];
+    public bool TaskCompleted => served[0] && served[1];
 
     private string prompt = "";
     private GUIStyle textStyle;
@@ -65,6 +76,7 @@ public class BeerGlassPour : MonoBehaviour
         PreparePourVisual(pintPourVisual);
 
         CreateBeerStream();
+        CreateServiceMarker();
     }
 
     void Update()
@@ -75,8 +87,22 @@ public class BeerGlassPour : MonoBehaviour
             || !uniform.ShiftCompleted || uniform.IsGuidePlaying)
             return;
 
-        if (Cursor.lockState != CursorLockMode.Locked)
+        if (serviceMarker != null)
+        {
+            serviceMarker.SetActive(true);
+            float width = TaskCompleted ? 0.035f : 0.025f + Mathf.Sin(Time.time * 3f) * 0.005f;
+            foreach (LineRenderer ring in serviceRings)
+                if (ring != null) ring.widthMultiplier = width;
+        }
+
+        if (TaskCompleted || Cursor.lockState != CursorLockMode.Locked)
             return;
+
+        if (pouring)
+        {
+            prompt = "Pouring beer...";
+            return;
+        }
 
         if (heldGlass == null)
         {
@@ -84,12 +110,21 @@ public class BeerGlassPour : MonoBehaviour
         }
         else
         {
+            if (IsAimingAtServiceMarker())
+            {
+                int index = HeldGlassIndex();
+                prompt = filled[index]
+                    ? "Left Click - Serve beer on the glowing marker"
+                    : "Fill this glass at the beer tap before serving.";
+                if (PressedLeftClick() && filled[index])
+                    ServeGlass(index);
+                return;
+            }
+
             CheckPouring();
 
             if (PressedLeftClick() && !pouring)
-            {
                 DropGlass();
-            }
         }
     }
 
@@ -102,7 +137,7 @@ public class BeerGlassPour : MonoBehaviour
 
         Transform target = hit.collider.transform;
 
-        if (schoonerGlass != null && target.IsChildOf(schoonerGlass.transform))
+        if (!served[0] && schoonerGlass != null && target.IsChildOf(schoonerGlass.transform))
         {
             prompt = "Left Click - Pick up schooner";
 
@@ -112,7 +147,7 @@ public class BeerGlassPour : MonoBehaviour
             return;
         }
 
-        if (pintGlass != null && target.IsChildOf(pintGlass.transform))
+        if (!served[1] && pintGlass != null && target.IsChildOf(pintGlass.transform))
         {
             prompt = "Left Click - Pick up pint";
 
@@ -169,6 +204,12 @@ public class BeerGlassPour : MonoBehaviour
 
     void CheckPouring()
     {
+        if (filled[HeldGlassIndex()])
+        {
+            prompt = "Beer ready! Find the glowing SERVE marker. Left Click elsewhere to return glass.";
+            return;
+        }
+
         if (beerNozzle == null)
         {
             prompt = "Beer nozzle is not connected.";
@@ -235,6 +276,9 @@ public class BeerGlassPour : MonoBehaviour
         SetVisible(pourVisual, false);
         SetVisible(heldGlass, true);
 
+        int index = HeldGlassIndex();
+        filled[index] = true;
+        CreateFilledVisual(index);
         pouring = false;
     }
 
@@ -290,10 +334,10 @@ public class BeerGlassPour : MonoBehaviour
         if (shader == null)
             shader = Shader.Find("Standard");
 
-        Material beerMaterial = new Material(shader);
-        beerMaterial.color = new Color(1f, 0.65f, 0.05f, 0.85f);
+        streamMaterial = new Material(shader);
+        streamMaterial.color = new Color(1f, 0.65f, 0.05f, 0.85f);
 
-        renderer.material = beerMaterial;
+        renderer.sharedMaterial = streamMaterial;
 
         beerStream.SetActive(false);
     }
@@ -309,6 +353,149 @@ public class BeerGlassPour : MonoBehaviour
         beerStream.transform.rotation = Quaternion.identity;
         beerStream.transform.localScale =
             new Vector3(0.035f, beerStreamLength * 0.5f, 0.035f);
+    }
+
+    int HeldGlassIndex()
+    {
+        return heldGlass == schoonerGlass ? 0 : 1;
+    }
+
+    bool IsAimingAtServiceMarker()
+    {
+        if (serviceMarker == null)
+            return false;
+
+        Ray ray = playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        return Physics.Raycast(ray, out RaycastHit hit, pickupDistance,
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide)
+            && hit.transform.IsChildOf(serviceMarker.transform);
+    }
+
+    void ServeGlass(int index)
+    {
+        if (!filled[index] || served[index] || pouring || heldGlass == null)
+            return;
+
+        // 원래 잔의 자식 메시 오프셋을 고려하여 잔 바닥이 표식 위에 오도록 정렬합니다.
+        Vector3 slot = serviceMarker.transform.TransformPoint(new Vector3(index == 0 ? -0.38f : 0.38f, 0f, 0f));
+        heldGlass.transform.SetParent(originalParent, false);
+        heldGlass.transform.localRotation = originalLocalRotation;
+        heldGlass.transform.localScale = originalLocalScale;
+        heldGlass.transform.position = slot;
+        Renderer[] renderers = heldGlass.GetComponentsInChildren<Renderer>();
+        if (renderers.Length > 0)
+        {
+            Bounds bounds = renderers[0].bounds;
+            foreach (Renderer renderer in renderers)
+                bounds.Encapsulate(renderer.bounds);
+            heldGlass.transform.position += new Vector3(slot.x - bounds.center.x,
+                slot.y - bounds.min.y, slot.z - bounds.center.z);
+        }
+
+        // 서빙된 잔은 다시 집거나 중복 제출할 수 없습니다.
+        served[index] = true;
+        serviceRings[index].sharedMaterial = completedMaterial;
+        heldGlass = null;
+        heldColliders = null;
+        prompt = TaskCompleted ? "Order complete! Both beers served." : "Beer served! Prepare the other glass.";
+    }
+
+    void CreateServiceMarker()
+    {
+        BoxCollider desk = null;
+        foreach (BoxCollider collider in FindObjectsByType<BoxCollider>(FindObjectsSortMode.None))
+        {
+            if (collider.gameObject.scene == gameObject.scene && collider.name == "BeerStage_BarCounterTop")
+            {
+                desk = collider;
+                break;
+            }
+        }
+        if (desk == null)
+        {
+            Debug.LogError("BeerGlassPour: BeerStage_BarCounterTop 데스크를 찾지 못해 서빙 표식을 만들 수 없습니다.");
+            return;
+        }
+
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null) shader = Shader.Find("Unlit/Color");
+        markerMaterial = new Material(shader) { color = new Color(0.1f, 0.85f, 1f) };
+        completedMaterial = new Material(shader) { color = new Color(0.25f, 1f, 0.35f) };
+        liquidMaterial = new Material(shader) { color = new Color(1f, 0.62f, 0.06f) };
+        foamMaterial = new Material(shader) { color = new Color(1f, 0.95f, 0.8f) };
+
+        // 현재 씬의 실제 데스크 앞쪽에 생성합니다. 원본 Transform은 변경하지 않습니다.
+        serviceMarker = new GameObject("BeerService_Marker_Runtime");
+        UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(serviceMarker, gameObject.scene);
+        serviceMarker.transform.position = desk.transform.TransformPoint(desk.center
+            + new Vector3(0f, desk.size.y * 0.5f, -desk.size.z * 0.25f)) + Vector3.up * 0.02f;
+        BoxCollider zone = serviceMarker.AddComponent<BoxCollider>();
+        zone.isTrigger = true;
+        zone.center = new Vector3(0f, 0.18f, 0f);
+        zone.size = new Vector3(1.5f, 0.4f, 0.7f);
+
+        for (int index = 0; index < 2; index++)
+        {
+            GameObject ringObject = new GameObject(index == 0 ? "Schooner_ServeSlot" : "Pint_ServeSlot");
+            ringObject.transform.SetParent(serviceMarker.transform, false);
+            ringObject.transform.localPosition = new Vector3(index == 0 ? -0.38f : 0.38f, 0f, 0f);
+            LineRenderer ring = ringObject.AddComponent<LineRenderer>();
+            ring.useWorldSpace = false;
+            ring.loop = true;
+            ring.positionCount = 48;
+            ring.widthMultiplier = 0.025f;
+            ring.sharedMaterial = markerMaterial;
+            ring.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            ring.receiveShadows = false;
+            for (int segment = 0; segment < 48; segment++)
+            {
+                float angle = segment * Mathf.PI * 2f / 48;
+                ring.SetPosition(segment, new Vector3(Mathf.Cos(angle) * 0.27f, 0f, Mathf.Sin(angle) * 0.27f));
+            }
+            serviceRings[index] = ring;
+        }
+        serviceMarker.SetActive(false);
+    }
+
+    void CreateFilledVisual(int index)
+    {
+        if (liquidMaterial == null || filledVisuals[index] != null)
+            return;
+        Renderer outer = heldGlass.GetComponentInChildren<Renderer>();
+        if (outer == null) return;
+        GameObject liquid = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        liquid.name = "FilledBeer_Runtime";
+        liquid.transform.SetParent(outer.transform, false);
+        liquid.transform.localPosition = new Vector3(0f, -0.2f, 0f);
+        liquid.transform.localScale = new Vector3(0.78f, 0.7f, 0.78f);
+        Collider liquidCollider = liquid.GetComponent<Collider>();
+        liquidCollider.enabled = false;
+        Destroy(liquidCollider);
+        liquid.GetComponent<Renderer>().sharedMaterial = liquidMaterial;
+        GameObject foam = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        foam.name = "BeerFoam_Runtime";
+        foam.transform.SetParent(liquid.transform, false);
+        foam.transform.localPosition = new Vector3(0f, 1f, 0f);
+        foam.transform.localScale = new Vector3(1f, 0.055f, 1f);
+        Collider foamCollider = foam.GetComponent<Collider>();
+        foamCollider.enabled = false;
+        Destroy(foamCollider);
+        foam.GetComponent<Renderer>().sharedMaterial = foamMaterial;
+        filledVisuals[index] = liquid;
+    }
+
+    void OnDestroy()
+    {
+        if (serviceMarker != null) Destroy(serviceMarker);
+        if (beerStream != null) Destroy(beerStream);
+        if (holdPoint != null) Destroy(holdPoint.gameObject);
+        foreach (GameObject visual in filledVisuals)
+            if (visual != null) Destroy(visual);
+        if (markerMaterial != null) Destroy(markerMaterial);
+        if (completedMaterial != null) Destroy(completedMaterial);
+        if (liquidMaterial != null) Destroy(liquidMaterial);
+        if (foamMaterial != null) Destroy(foamMaterial);
+        if (streamMaterial != null) Destroy(streamMaterial);
     }
 
     bool PressedLeftClick()
@@ -333,7 +520,7 @@ public class BeerGlassPour : MonoBehaviour
 
     void OnGUI()
     {
-        if (string.IsNullOrEmpty(prompt))
+        if (uniform == null || !uniform.ShiftCompleted)
             return;
 
         if (textStyle == null)
@@ -345,10 +532,33 @@ public class BeerGlassPour : MonoBehaviour
             textStyle.normal.textColor = Color.white;
         }
 
+        int count = (served[0] ? 1 : 0) + (served[1] ? 1 : 0);
+        Rect taskArea = new Rect(Mathf.Max(15f, Screen.width - 405f), 15f, 390f, 105f);
+        GUI.Box(taskArea, "");
+        GUI.Label(taskArea, TaskCompleted
+            ? "TASK COMPLETE!\nBoth beers served."
+            : "SERVE TWO BEERS  " + count + "/2\nSchooner: " + GlassStatus(0) + "   Pint: " + GlassStatus(1), textStyle);
+
+        if (serviceMarker != null && serviceMarker.activeInHierarchy)
+        {
+            Vector3 screen = playerCamera.WorldToScreenPoint(serviceMarker.transform.position + Vector3.up * 0.5f);
+            if (screen.z > 0f && screen.z < 12f)
+            {
+                GUI.Label(new Rect(screen.x - 150f, Screen.height - screen.y - 25f, 300f, 55f),
+                    TaskCompleted ? "SERVING COMPLETE" : "SERVE HERE  " + count + "/2", textStyle);
+            }
+        }
+
         GUI.Label(
             new Rect(0, Screen.height / 2f + 55f, Screen.width, 45f),
             prompt,
             textStyle
         );
     }
+
+    string GlassStatus(int index)
+    {
+        return served[index] ? "SERVED" : filled[index] ? "READY" : "EMPTY";
+    }
+
 }
