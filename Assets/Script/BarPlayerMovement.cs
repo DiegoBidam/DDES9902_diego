@@ -157,16 +157,19 @@ public class BarPlayerMovement : MonoBehaviour
         BoxCollider uniformFloor = null;
         BoxCollider beerFloor = null;
 
-        foreach (BoxCollider floor in FindObjectsByType<BoxCollider>(FindObjectsSortMode.None))
+        foreach (GameObject root in gameObject.scene.GetRootGameObjects())
         {
-            if (floor.gameObject.scene != gameObject.scene || floor.isTrigger)
-                continue;
-
-            switch (floor.name)
+            foreach (BoxCollider floor in root.GetComponentsInChildren<BoxCollider>())
             {
-                case "OutsideFloor": entranceFloor = floor; break;
-                case "Floor": uniformFloor = floor; break;
-                case "BeerStage_Floor": beerFloor = floor; break;
+                if (!floor.gameObject.activeInHierarchy || floor.isTrigger)
+                    continue;
+
+                switch (floor.name)
+                {
+                    case "OutsideFloor": entranceFloor = floor; break;
+                    case "Floor": uniformFloor = floor; break;
+                    case "BeerStage_Floor": beerFloor = floor; break;
+                }
             }
         }
 

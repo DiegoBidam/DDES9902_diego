@@ -413,13 +413,18 @@ public class BeerGlassPour : MonoBehaviour
     void CreateServiceMarker()
     {
         BoxCollider desk = null;
-        foreach (BoxCollider collider in FindObjectsByType<BoxCollider>(FindObjectsSortMode.None))
+        foreach (GameObject root in gameObject.scene.GetRootGameObjects())
         {
-            if (collider.gameObject.scene == gameObject.scene && collider.name == "BeerStage_BarCounterTop")
+            foreach (BoxCollider collider in root.GetComponentsInChildren<BoxCollider>())
             {
-                desk = collider;
-                break;
+                if (collider.gameObject.activeInHierarchy && collider.name == "BeerStage_BarCounterTop")
+                {
+                    desk = collider;
+                    break;
+                }
             }
+            if (desk != null)
+                break;
         }
         if (desk == null)
         {
