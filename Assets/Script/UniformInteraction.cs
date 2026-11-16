@@ -49,6 +49,14 @@ public class UniformInteraction : MonoBehaviour
     private string prompt = "";
     private string subtitle = "";
     private GUIStyle textStyle;
+    private GameObject uniformSignRoot;
+    private Transform shirtSign;
+    private Transform apronSign;
+    private TextMesh shirtSignHint;
+    private TextMesh apronSignHint;
+    private Material signBackground;
+    private Material shirtSignAccent;
+    private Material apronSignAccent;
 
     void Start()
     {
@@ -70,6 +78,7 @@ public class UniformInteraction : MonoBehaviour
         clothingVoiceSource.spatialBlend = 0f;
 
         HideClockGuide();
+        CreateUniformSigns();
     }
 
     void Update()
@@ -259,6 +268,110 @@ public class UniformInteraction : MonoBehaviour
         guidePlaybackFrame = Time.frameCount;
         clothingVoiceSource.clip = clip;
         clothingVoiceSource.Play();
+    }
+
+    void CreateUniformSigns()
+    {
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null) shader = Shader.Find("Unlit/Color");
+        if (shader == null) return;
+        signBackground = new Material(shader) { color = new Color(0.035f, 0.085f, 0.1f) };
+        shirtSignAccent = new Material(shader) { color = new Color(0.3f, 0.85f, 0.78f) };
+        apronSignAccent = new Material(shader) { color = new Color(1f, 0.72f, 0.3f) };
+        uniformSignRoot = new GameObject("UniformGuideSigns_Runtime");
+        UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(uniformSignRoot, gameObject.scene);
+        shirtSign = CreateUniformSign(shirt, "T-SHIRT", shirtSignAccent, out shirtSignHint);
+        apronSign = CreateUniformSign(apron, "APRON", apronSignAccent, out apronSignHint);
+    }
+
+    Transform CreateUniformSign(GameObject item, string title, Material accent, out TextMesh hint)
+    {
+        Bounds bounds = new Bounds(item.transform.position, Vector3.zero);
+        Renderer[] renderers = item.GetComponentsInChildren<Renderer>();
+        if (renderers.Length > 0)
+        {
+            bounds = renderers[0].bounds;
+            foreach (Renderer renderer in renderers) bounds.Encapsulate(renderer.bounds);
+        }
+        GameObject sign = new GameObject(title + "_GuideSign");
+        sign.transform.SetParent(uniformSignRoot.transform, false);
+        sign.transform.position = new Vector3(bounds.center.x, bounds.max.y + 0.25f, bounds.center.z);
+        AddSignPanel(sign.transform, "Nameplate", Vector3.zero, new Vector3(0.92f, 0.32f, 0.018f), signBackground);
+        AddSignPanel(sign.transform, "Accent", new Vector3(-0.445f, 0f, -0.012f), new Vector3(0.018f, 0.32f, 0.008f), accent);
+        AddSignText(sign.transform, title, new Vector3(0.01f, 0.065f, -0.014f), 0.82f, 0.115f, true);
+        hint = AddSignText(sign.transform, "", new Vector3(0.01f, -0.075f, -0.014f), 0.82f, 0.065f, false);
+        return sign.transform;
+    }
+
+    void AddSignPanel(Transform parent, string name, Vector3 position, Vector3 size, Material material)
+    {
+        GameObject panel = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        panel.name = name;
+        panel.transform.SetParent(parent, false);
+        panel.transform.localPosition = position;
+        panel.transform.localScale = size;
+        panel.GetComponent<Renderer>().sharedMaterial = material;
+        // 표지는 착용 Raycast나 플레이어 이동을 가리지 않습니다.
+        Collider collider = panel.GetComponent<Collider>();
+        collider.enabled = false;
+        Destroy(collider);
+    }
+
+    TextMesh AddSignText(Transform parent, string content, Vector3 position, float width, float height, bool bold)
+    {
+        GameObject writing = new GameObject("SignText");
+        writing.transform.SetParent(parent, false);
+        writing.transform.localPosition = position;
+        TextMesh text = writing.AddComponent<TextMesh>();
+        text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        text.fontSize = 64;
+        text.characterSize = bold ? 0.08f : 0.05f;
+        text.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
+        text.anchor = TextAnchor.MiddleCenter;
+        text.alignment = TextAlignment.Center;
+        text.color = new Color(0.97f, 0.98f, 0.92f);
+        writing.GetComponent<Renderer>().sharedMaterial = text.font.material;
+        FitSignText(text, content, width, height);
+        return text;
+    }
+
+    void FitSignText(TextMesh text, string content, float width, float height)
+    {
+        if (text.text == content && content.Length > 0) return;
+        text.font.RequestCharactersInTexture(content, text.fontSize, text.fontStyle);
+        text.text = content;
+        text.transform.localScale = Vector3.one;
+        Bounds bounds = text.GetComponent<Renderer>().localBounds;
+        if (bounds.size.x > 0f && bounds.size.y > 0f)
+            text.transform.localScale = Vector3.one * Mathf.Min(width / bounds.size.x, height / bounds.size.y);
+    }
+
+    void LateUpdate()
+    {
+        UpdateUniformSign(shirtSign, shirt, ShirtWorn, shirtSignHint,
+            IsGuidePlaying ? "Listen to the guide..." : "Aim at shirt + press E");
+        UpdateUniformSign(apronSign, apron, ApronWorn, apronSignHint,
+            !ShirtWorn ? "Wear the T-shirt first" : IsGuidePlaying ? "Listen to the guide..." : "Aim at apron + press E");
+    }
+
+    void UpdateUniformSign(Transform sign, GameObject item, bool worn, TextMesh hint, string instruction)
+    {
+        if (sign == null || playerCamera == null) return;
+        bool visible = !worn && !shiftStarted && item != null && item.activeInHierarchy;
+        sign.gameObject.SetActive(visible);
+        if (!visible) return;
+        Vector3 awayFromCamera = sign.position - playerCamera.transform.position;
+        if (awayFromCamera.sqrMagnitude > 0.0001f)
+            sign.rotation = Quaternion.LookRotation(awayFromCamera, Vector3.up);
+        FitSignText(hint, instruction, 0.82f, 0.065f);
+    }
+
+    void OnDestroy()
+    {
+        if (uniformSignRoot != null) Destroy(uniformSignRoot);
+        if (signBackground != null) Destroy(signBackground);
+        if (shirtSignAccent != null) Destroy(shirtSignAccent);
+        if (apronSignAccent != null) Destroy(apronSignAccent);
     }
 
     bool PressedInteract()
