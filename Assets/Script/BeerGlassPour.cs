@@ -127,18 +127,28 @@ public class BeerGlassPour : MonoBehaviour
             || !uniform.ShiftCompleted || uniform.IsGuidePlaying)
             return;
 
-        if (!beerIntroStarted)
-        {
-            beerIntroStarted = true;
-            QueueBeerGuide(0);
-            return;
-        }
         if (pendingBeerInstruction >= 0)
         {
             if (beerGuideRoutine == null) beerGuideRoutine = StartCoroutine(PlayQueuedBeerGuide());
             return;
         }
         if (IsGuidePlaying) return;
+        if (!beerIntroStarted)
+        {
+            if (IsNearBeerStation())
+            {
+                beerIntroStarted = true;
+                QueueBeerGuide(0);
+            }
+            else prompt = "Walk to the beer tap to hear your first instruction.";
+            return;
+        }
+        if (TaskCompleted && !cocktailBriefingCompleted)
+        {
+            if (IsNearCocktailStation()) QueueBeerGuide(3, true);
+            else prompt = "Walk around the bar to the rear cocktail table.";
+            return;
+        }
         if (recipeCards != null) recipeCards.SetAvailable(cocktailBriefingCompleted);
 
         if (serviceMarker != null)
@@ -215,7 +225,6 @@ public class BeerGlassPour : MonoBehaviour
         if (recipeCards != null) recipeCards.SetAvailable(false);
         try
         {
-            if (instruction == 3) MoveToCocktailStation();
             if (waitForBeerServeSound && sounds != null) yield return sounds.WaitForResult();
             else yield return null;
             if (beerGuidance != null) yield return beerGuidance.Play(instruction);
@@ -240,64 +249,20 @@ public class BeerGlassPour : MonoBehaviour
         // 중단된 안내는 pending을 유지해 컴포넌트를 다시 켜면 재생합니다.
     }
 
-    void MoveToCocktailStation()
+    bool IsNearBeerStation()
     {
-        BoxCollider table = cocktailEquipment != null ? cocktailEquipment.Table : null;
-        CharacterController controller = GetComponent<CharacterController>();
-        if (table == null || controller == null || recipeCards == null
-            || !recipeCards.TryGetFocusPoint(out Vector3 focus))
-        {
-            Debug.LogWarning("Cocktail station destination unavailable; walk to the rear recipe table.");
-            return;
-        }
-        BoxCollider floor = null;
-        foreach (GameObject sceneRoot in gameObject.scene.GetRootGameObjects())
-            foreach (BoxCollider collider in sceneRoot.GetComponentsInChildren<BoxCollider>())
-                if (collider.name == "BeerStage_Floor" && !collider.isTrigger) floor = collider;
-        if (floor == null) return;
-        Physics.SyncTransforms();
-        Vector3 forward = Vector3.ProjectOnPlane(table.transform.forward, Vector3.up).normalized;
-        if (forward.sqrMagnitude < 0.5f) return;
-        float radius = controller.radius * Mathf.Max(Mathf.Abs(transform.lossyScale.x), Mathf.Abs(transform.lossyScale.z));
-        float clearance = radius + controller.skinWidth + 0.12f;
-        float depth = table.size.z * Mathf.Abs(table.transform.lossyScale.z) * 0.5f;
-        Vector3 destination = focus - forward * (depth + clearance);
-        float footOffset = (controller.center.y - controller.height * 0.5f) * Mathf.Abs(transform.lossyScale.y);
-        destination.y = floor.bounds.max.y - footOffset + 0.02f;
-        Bounds area = floor.bounds;
-        if (destination.x < area.min.x + clearance || destination.x > area.max.x - clearance
-            || destination.z < area.min.z + clearance || destination.z > area.max.z - clearance) return;
-        Quaternion facing = Quaternion.LookRotation(forward, Vector3.up);
-        Vector3 center = destination + facing * Vector3.Scale(controller.center, transform.lossyScale);
-        float halfSegment = Mathf.Max(0f, controller.height * Mathf.Abs(transform.lossyScale.y) * 0.5f - radius);
-        foreach (Collider obstacle in Physics.OverlapCapsule(center - Vector3.up * halfSegment,
-            center + Vector3.up * halfSegment, radius, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
-        {
-            if (obstacle != floor && !obstacle.transform.IsChildOf(transform))
-            {
-                Debug.LogWarning("Cocktail station destination is obstructed; walk to the rear recipe table.");
-                return;
-            }
-        }
-        bool wasEnabled = controller.enabled;
-        controller.enabled = false;
-        try
-        {
-            transform.position = destination;
-            transform.rotation = facing;
-            BarPlayerMovement movement = GetComponent<BarPlayerMovement>();
-            if (movement != null)
-            {
-                Vector3 toCards = focus - playerCamera.transform.position;
-                float pitch = Mathf.Atan2(-toCards.y, new Vector2(toCards.x, toCards.z).magnitude) * Mathf.Rad2Deg;
-                movement.SetViewPitch(pitch);
-            }
-        }
-        finally
-        {
-            controller.enabled = wasEnabled;
-            Physics.SyncTransforms();
-        }
+        if (beerNozzle == null) return false;
+        Vector3 offset = beerNozzle.position - transform.position;
+        offset.y = 0f;
+        return offset.sqrMagnitude <= 2.25f * 2.25f;
+    }
+
+    bool IsNearCocktailStation()
+    {
+        if (recipeCards == null || !recipeCards.TryGetFocusPoint(out Vector3 focus)) return false;
+        Vector3 offset = focus - transform.position;
+        offset.y = 0f;
+        return offset.sqrMagnitude <= 1.6f * 1.6f;
     }
 
     void CheckGlassPickup()
@@ -600,8 +565,8 @@ public class BeerGlassPour : MonoBehaviour
         heldColliders = null;
         prompt = TaskCompleted ? "Order complete! Both beers served." : "Beer served! Prepare the other glass.";
         ShowAction(TaskCompleted ? "BEER TASK COMPLETE" : "BEER SERVED - 1 / 2",
-            TaskCompleted ? "Both glasses served. Listen to the cocktail station guide." : "Schooner served. Listen to the pint instruction.", 3f);
-        QueueBeerGuide(TaskCompleted ? 3 : 2, true);
+            TaskCompleted ? "Both glasses served. Walk around the bar to the rear cocktail table." : "Schooner served. Listen to the pint instruction.", 3f);
+        if (!TaskCompleted) QueueBeerGuide(2, true);
     }
 
     void CreateServiceMarker()
@@ -817,10 +782,14 @@ public class BeerGlassPour : MonoBehaviour
             instruction = "Training complete. The bar is open.";
         else if (cocktailEquipment != null && cocktailEquipment.IsHolding)
             instruction = "COCKTAIL TOOLS: " + cocktailEquipment.HeldName + "\nLEFT CLICK to put it back on the table";
+        else if (TaskCompleted && !cocktailBriefingCompleted)
+            instruction = "Both beers served. Walk around the bar to the rear cocktail table for your briefing.";
         else if (TaskCompleted)
             instruction = "BEER TASK COMPLETE! Choose a recipe card on the cocktail table.";
         else if (pouring)
             instruction = "2. POURING BEER...";
+        else if (!beerIntroStarted)
+            instruction = "Walk to the beer tap. Your first instruction plays when you arrive.";
         else if (heldGlass == null)
             instruction = "1. Pick up the " + (ExpectedBeerGlass == 0 ? "schooner" : "pint") + " with LEFT CLICK";
         else if (!filled[HeldGlassIndex()])
