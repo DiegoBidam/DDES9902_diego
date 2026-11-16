@@ -46,6 +46,9 @@ public class BeerGlassPour : MonoBehaviour
     private RecipeCards recipeCards;
     private CocktailPractice practice;
     private int practiceReturnFrame = -1;
+    private readonly int[] passedTrials = new int[3];
+    private bool barOpened;
+    private bool AllTrialsComplete => passedTrials[0] >= 3 && passedTrials[1] >= 3 && passedTrials[2] >= 3;
     public bool IsRecipeOpen => practiceReturnFrame == Time.frameCount || (recipeCards != null && recipeCards.BlocksInput);
     private readonly LineRenderer[] serviceRings = new LineRenderer[2];
     private Material markerMaterial;
@@ -630,12 +633,14 @@ public class BeerGlassPour : MonoBehaviour
         int count = (served[0] ? 1 : 0) + (served[1] ? 1 : 0);
         Rect taskArea = new Rect(Mathf.Max(15f, Screen.width - 405f), 15f, 390f, 105f);
         GUI.Box(taskArea, "");
-        GUI.Label(taskArea, TaskCompleted
+        GUI.Label(taskArea, barOpened ? "BAR OPEN\nAll training trials complete." : TaskCompleted
             ? "TASK COMPLETE!\nBoth beers served."
             : "SERVE TWO BEERS  " + count + "/2\nSchooner: " + GlassStatus(0) + "   Pint: " + GlassStatus(1), textStyle);
 
         string instruction;
-        if (cocktailEquipment != null && cocktailEquipment.IsHolding)
+        if (barOpened)
+            instruction = "Training complete. The bar is open.";
+        else if (cocktailEquipment != null && cocktailEquipment.IsHolding)
             instruction = "COCKTAIL TOOLS: " + cocktailEquipment.HeldName + "\nLEFT CLICK to put it back on the table";
         else if (TaskCompleted)
             instruction = "BEER TASK COMPLETE! Explore the cocktail tools on the rear table.";
@@ -654,7 +659,6 @@ public class BeerGlassPour : MonoBehaviour
         bool cocktailFocus = TaskCompleted || (cocktailEquipment != null && cocktailEquipment.IsHolding);
         GUI.Label(instructionArea, (cocktailFocus ? "COCKTAIL STATION\n" : "PICK UP > POUR > SERVE\n") + instruction, textStyle);
         if (cocktailEquipment != null) cocktailEquipment.DrawLabels(textStyle);
-        if (recipeCards != null) recipeCards.DrawNoteLabels(textStyle);
 
         if (serviceMarker != null && serviceMarker.activeInHierarchy)
         {
@@ -712,6 +716,45 @@ public class BeerGlassPour : MonoBehaviour
         GUI.color = old;
         GUI.Label(new Rect(panel.x + 18f, panel.y + 7f, width - 36f, 33f), actionTitle, actionTitleStyle);
         GUI.Label(new Rect(panel.x + 18f, panel.y + 43f, width - 36f, 40f), actionDetail, actionDetailStyle);
+    }
+
+    void OpenBar()
+    {
+        if (!AllTrialsComplete) return;
+        if (practice != null && practice.IsActive) practice.Dispose();
+        if (recipeCards != null) recipeCards.Close();
+        barOpened = true;
+        ShowAction("BAR OPEN", "All nine trials passed. Training is complete.", 4f);
+    }
+
+    void DrawTrialChecks(Rect area, int recipe, GUIStyle labelStyle)
+    {
+        float cell = area.width / 3f;
+        for (int index = 0; index < 3; index++)
+        {
+            bool done = passedTrials[recipe] > index;
+            Rect box = new Rect(area.x + index * cell + 3f, area.y + 5f, 22f, 22f);
+            Color old = GUI.color;
+            GUI.color = done ? new Color(0.22f, 0.55f, 0.36f) : new Color(0.5f, 0.58f, 0.53f, 0.35f);
+            GUI.DrawTexture(box, Texture2D.whiteTexture); GUI.color = old;
+            if (done)
+            {
+                DrawCheckStroke(new Vector2(box.x + 4f, box.y + 11f), new Vector2(box.x + 9f, box.y + 16f));
+                DrawCheckStroke(new Vector2(box.x + 9f, box.y + 16f), new Vector2(box.x + 18f, box.y + 6f));
+            }
+            GUI.Label(new Rect(box.x + 30f, area.y + 3f, cell - 35f, 26f), "Trial " + (index + 1), labelStyle);
+        }
+    }
+
+    void DrawCheckStroke(Vector2 start, Vector2 end)
+    {
+        Matrix4x4 saved = GUI.matrix;
+        Color old = GUI.color;
+        Vector2 delta = end - start;
+        GUIUtility.RotateAroundPivot(Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg, start);
+        GUI.color = Color.white;
+        GUI.DrawTexture(new Rect(start.x, start.y - 1f, delta.magnitude, 2.5f), Texture2D.whiteTexture);
+        GUI.color = old; GUI.matrix = saved;
     }
 
     void BeginPractice(int recipe)
@@ -961,6 +1004,14 @@ public class BeerGlassPour : MonoBehaviour
         private const float TableY = 0.98f;
         private readonly BeerGlassPour owner;
         private readonly int recipe;
+        private int trial;
+        private bool awaitingStart, roundRecorded;
+        private readonly string[] trialNames = { "Guided practice", "Ingredient recall", "Independent trial" };
+        private readonly string[] trialDescriptions = {
+            "Full guidance: glass, ingredients, target amounts and technique cues.",
+            "Glass and ingredient names only. Target amounts and technique hints are hidden.",
+            "Workbench and timer only. Prepare the drink from memory and press ENTER to finish."
+        };
         private readonly string[] recipeNames = { "Gin & Tonic", "Negroni", "Long Island Iced Tea" };
         private readonly string[] glassNames = { "Rocks glass", "Old-fashioned glass", "Long-drink glass" };
         private readonly string[] ingredientNames = { "Rum", "Gin", "Vodka", "Triple sec", "Campari", "Tonic water", "Ice", "Cola", "Lemon juice", "Sweet vermouth" };
@@ -988,7 +1039,8 @@ public class BeerGlassPour : MonoBehaviour
         private readonly Material[] ingredientMaterials = new Material[10];
         private readonly float[] levels = new float[4];
         private UnityEngine.SceneManagement.Scene scene;
-        private GameObject root, shaker, stirrer, shakerLid, stream;
+        private GameObject root, shaker, stirrer, shakerLid, stream, jigger;
+        private Vector3 jiggerHome;
         private Camera camera;
         private BarPlayerMovement sourceMovement;
         private bool savedMovement, savedUniform, savedCamera;
@@ -996,6 +1048,7 @@ public class BeerGlassPour : MonoBehaviour
         private bool savedCursorVisible;
         private Material steel, glass, ice, liquid, mat, white, labelPaper, spoonMetal;
         private Font labelFont;
+        private TextMesh jiggerReadout;
         private Phase phase;
         private int selectedGlass, strokes, travelDirection, lastStrokeDirection, toolPickedFrame;
         private int hovered = -1;
@@ -1015,6 +1068,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             this.owner = owner;
             this.recipe = Mathf.Clamp(recipe, 0, 2);
+            trial = Mathf.Clamp(owner.passedTrials[this.recipe], 0, 2);
             sourceMovement = owner.GetComponent<BarPlayerMovement>();
             savedMovement = sourceMovement != null && sourceMovement.enabled;
             savedUniform = owner.uniform != null && owner.uniform.enabled;
@@ -1117,7 +1171,7 @@ public class BeerGlassPour : MonoBehaviour
             surface.AddComponent<MeshRenderer>().sharedMaterial = material;
         }
 
-        private void LabelPlaque(Transform parent, string content, Vector3 position, Vector2 size)
+        private TextMesh LabelPlaque(Transform parent, string content, Vector3 position, Vector2 size)
         {
             Part("PrintedLabelBack", PrimitiveType.Cube, parent, position,
                 new Vector3(size.x, size.y, 0.006f), labelPaper);
@@ -1139,6 +1193,7 @@ public class BeerGlassPour : MonoBehaviour
             if (bounds.size.x > 0f && bounds.size.y > 0f)
                 writing.transform.localScale = Vector3.one * Mathf.Min(size.x * 0.9f / bounds.size.x,
                     size.y * 0.88f / bounds.size.y);
+            return text;
         }
 
         private void BuildScene()
@@ -1215,6 +1270,14 @@ public class BeerGlassPour : MonoBehaviour
                 Cup(vessel.transform, radius, glassHeights[index], glass, index == 1 ? 12 : 48);
                 Register(vessel, index, Vector3.up * glassHeights[index] * 0.5f, new Vector3(radius * 2f, glassHeights[index], radius * 2f));
                 glassObjects[index] = vessel;
+                GameObject glassTag = NewObject("GlassNameplate", root.transform);
+                glassTag.transform.localPosition = vessel.transform.localPosition;
+                LabelPlaque(glassTag.transform, glassNames[index].ToUpperInvariant().Replace(" ", "\n"),
+                    new Vector3(0f, 0.046f, -0.15f), new Vector2(0.32f, 0.085f));
+                BoxCollider tagHit = glassTag.AddComponent<BoxCollider>();
+                tagHit.center = new Vector3(0f, 0.046f, -0.15f);
+                tagHit.size = new Vector3(0.34f, 0.10f, 0.08f);
+                hitTargets.Add(tagHit, index);
                 fills[index] = Part("Drink", PrimitiveType.Cylinder, vessel.transform, Vector3.up * 0.01f, new Vector3(radius * 1.5f, 0.001f, radius * 1.5f), liquid);
                 rings[index] = Part("SelectedGlass", PrimitiveType.Cylinder, root.transform,
                     vessel.transform.localPosition - Vector3.up * 0.002f, new Vector3(radius * 2.5f, 0.002f, radius * 2.5f), highlight);
@@ -1250,12 +1313,19 @@ public class BeerGlassPour : MonoBehaviour
                 Vector3.up * 0.004f, new Vector3(0.18f, 0.004f, 0.18f), mat);
             LabelPlaque(spoonStand.transform, "STIRRING\nSTICK", new Vector3(0f, 0.055f, -0.11f), new Vector2(0.28f, 0.095f));
             Register(stirrer, 30, Vector3.up * 0.21f, new Vector3(0.28f, 0.44f, 0.27f));
-            GameObject jigger = NewObject("DoubleJigger", root.transform);
-            jigger.transform.localPosition = new Vector3(0.06f, TableY + 0.006f, -0.05f);
+            jigger = NewObject("DoubleJigger", root.transform);
+            jiggerHome = new Vector3(0.06f, TableY + 0.006f, -0.05f);
+            jigger.transform.localPosition = jiggerHome;
             GameObject upper = NewObject("1oz", jigger.transform);
             upper.transform.localPosition = Vector3.up * 0.05f; Cup(upper.transform, 0.036f, 0.065f, steel);
+            Register(upper, 32, Vector3.up * 0.0325f, new Vector3(0.08f, 0.065f, 0.08f));
+            LabelPlaque(upper.transform, "1 oz", new Vector3(0f, 0.032f, -0.039f), new Vector2(0.085f, 0.03f));
             GameObject lower = NewObject("0.5oz", jigger.transform);
             lower.transform.localPosition = Vector3.up * 0.05f; lower.transform.localRotation = Quaternion.Euler(180f, 0f, 0f); Cup(lower.transform, 0.028f, 0.05f, steel);
+            Register(lower, 33, Vector3.up * 0.025f, new Vector3(0.065f, 0.05f, 0.065f));
+            GameObject gauge = NewObject("JiggerMeasureReadout", root.transform);
+            gauge.transform.localPosition = jiggerHome;
+            jiggerReadout = LabelPlaque(gauge.transform, "1 oz", new Vector3(0.13f, 0.075f, -0.10f), new Vector2(0.13f, 0.045f));
             stream = Part("PourStream", PrimitiveType.Cylinder, root.transform, Vector3.zero, new Vector3(0.014f, 0.12f, 0.014f), liquid);
             stream.SetActive(false);
             Physics.SyncTransforms();
@@ -1276,9 +1346,13 @@ public class BeerGlassPour : MonoBehaviour
             shakerIced = false; glassIced = false; stirred = false; shaken = false; transferred = false;
             noticeUntil = 0f; pendingPourTitle = ""; pendingPourDetail = "";
             strokes = 0; travel = 0f; travelDirection = 0; lastStrokeDirection = 0;
-            failed = false; completed = false; error = ""; measure = 1f; remaining = RoundSeconds;
+            failed = false; completed = false; error = ""; remaining = RoundSeconds;
+            awaitingStart = true; roundRecorded = false;
+            measure = 1f;
+            jigger.transform.localPosition = jiggerHome;
+            jigger.transform.localRotation = Quaternion.identity;
+            UpdateJiggerReadout();
             hovered = -1;
-            Notify("PRACTICE STARTED", "45 seconds. Choose the " + glassNames[recipe] + ".");
         }
 
         private float RequiredAmount(int ingredient)
@@ -1341,7 +1415,10 @@ public class BeerGlassPour : MonoBehaviour
         private void Fail(string message)
         {
             noticeUntil = 0f;
-            error = message; failed = true; StopPour(false); ReturnTool();
+            error = trial == 0 ? message : message.StartsWith("Time's up")
+                ? "Time's up! The 45-second limit has expired."
+                : "The glass, ingredients, amounts or technique are not correct. Please try again.";
+            failed = true; StopPour(false); ReturnTool();
         }
 
         private void AddIngredient(int ingredient)
@@ -1446,9 +1523,10 @@ public class BeerGlassPour : MonoBehaviour
             {
                 if (phase != Phase.ChooseGlass) return;
                 if (code != recipe) { Fail("Incorrect glass.\nChoose the " + glassNames[recipe] + " for " + recipeNames[recipe] + "."); return; }
-                selectedGlass = code; rings[code].SetActive(true); phase = Phase.Build;
+                selectedGlass = code; rings[code].SetActive(trial < 2); phase = Phase.Build;
                 Notify("GLASS SELECTED", glassNames[code] + " is ready. Add your ingredients."); return;
             }
+            if (code == 32 || code == 33) { SetMeasure(code == 32 ? 1f : 0.5f); return; }
             if (phase == Phase.Transfer && code == 31)
             {
                 shakerLid.SetActive(false);
@@ -1525,8 +1603,9 @@ public class BeerGlassPour : MonoBehaviour
         private Rect FinishButton() { return new Rect(Screen.width - 202f, Screen.height - 83f, 186f, 62f); }
         private bool OverUI(Vector2 pointer)
         {
+            if (trial == 2) return TimerOnlyRect().Contains(pointer);
             return new Rect(0f, 0f, Screen.width, 132f).Contains(pointer) || MeasurePanel().Contains(pointer)
-                || (phase == Phase.Ready && FinishButton().Contains(pointer));
+                || ((phase == Phase.Ready || trial == 1) && FinishButton().Contains(pointer));
         }
         private Rect LabelRect(int code)
         {
@@ -1549,23 +1628,22 @@ public class BeerGlassPour : MonoBehaviour
             if (code < 20)
             {
                 int ingredient = code - 10;
-                float required = RequiredAmount(ingredient);
-                string status = required < 0f ? "Not in recipe" : required > 0f
-                    ? ingredientTotals[ingredient].ToString("0.#") + " / " + required.ToString("0.#") + " oz"
-                    : ingredient == 6 && recipe == 2 ? ((shakerIced ? 1 : 0) + (glassIced ? 1 : 0)) + " / 2 containers"
-                    : included[ingredient] ? "ADDED" : ingredient == 6 ? "ADD ICE" : "TOP UP";
-                return (code - 9).ToString("00") + "  " + ingredientNames[ingredient] + "\n" + status;
+                return (code - 9).ToString("00") + "  " + ingredientNames[ingredient] + "\n" + IngredientProgress(ingredient);
             }
-            if (code == 30) return phase == Phase.Stir && !toolHeld ? "STIRRING STICK\nCLICK TO PICK UP" : "Stirring stick";
+            if (code == 30) return trial == 0 && phase == Phase.Stir && !toolHeld ? "STIRRING STICK\nCLICK TO PICK UP" : "Stirring stick";
+            if (code == 32) return "Jigger: 1 oz";
+            if (code == 33) return "Jigger: 0.5 oz";
             return "Shaker";
         }
         public void Tick()
         {
             if (!IsActive) return;
             if (owner.PressedRecipeClose()) { Exit(); return; }
-            if (failed || completed) return;
+            if (awaitingStart || failed || completed) return;
             remaining = Mathf.Max(0f, remaining - Time.unscaledDeltaTime);
             if (remaining <= 0f) { Fail("Time's up!\nThe 45-second limit has expired."); return; }
+            if (FinishRequested()) { TryFinish(); return; }
+            if (!pouring && !toolHeld && MeasureSwitchRequested()) SetMeasure(measure == 1f ? 0.5f : 1f);
             if (pouring) { TickPour(); return; }
             Vector2 pointer = Pointer(); Vector2 guiPointer = new Vector2(pointer.x, Screen.height - pointer.y);
             if (toolHeld)
@@ -1595,12 +1673,67 @@ public class BeerGlassPour : MonoBehaviour
             if (hovered >= 0 && owner.PressedLeftClick()) SelectTarget(hovered);
         }
 
+        private bool FinishRequested()
+        {
+#if ENABLE_INPUT_SYSTEM
+            return Keyboard.current != null && (Keyboard.current.enterKey.wasPressedThisFrame || Keyboard.current.numpadEnterKey.wasPressedThisFrame);
+#else
+            return Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter);
+#endif
+        }
+        private bool MeasureSwitchRequested()
+        {
+#if ENABLE_INPUT_SYSTEM
+            return Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame;
+#else
+            return Input.GetKeyDown(KeyCode.R);
+#endif
+        }
+        private void SetMeasure(float value)
+        {
+            measure = value;
+            jigger.transform.localPosition = jiggerHome + (value == 0.5f ? Vector3.up * 0.115f : Vector3.zero);
+            jigger.transform.localRotation = value == 0.5f ? Quaternion.Euler(180f, 0f, 0f) : Quaternion.identity;
+            UpdateJiggerReadout();
+            Notify("MEASURE SET", "The jigger is set to " + value.ToString("0.#") + " oz.", 1.6f);
+        }
+        private void UpdateJiggerReadout()
+        {
+            if (jiggerReadout == null) return;
+            string content = measure.ToString("0.#") + " oz";
+            labelFont.RequestCharactersInTexture(content, 64, FontStyle.Bold);
+            jiggerReadout.text = content;
+            jiggerReadout.transform.localScale = Vector3.one;
+            Bounds bounds = jiggerReadout.GetComponent<Renderer>().localBounds;
+            if (bounds.size.x > 0f && bounds.size.y > 0f)
+                jiggerReadout.transform.localScale = Vector3.one * Mathf.Min(0.117f / bounds.size.x, 0.0396f / bounds.size.y);
+        }
+        private void TryFinish()
+        {
+            if (awaitingStart || failed || completed || pouring) return;
+            if (phase != Phase.Ready)
+            {
+                Fail(trial == 0 ? "The drink is not complete.\n" + NextInstruction() : "The drink is not complete.");
+                return;
+            }
+            completed = true;
+            if (!roundRecorded)
+            {
+                owner.passedTrials[recipe] = Mathf.Max(owner.passedTrials[recipe], trial + 1);
+                roundRecorded = true;
+            }
+        }
+        private Rect TimerOnlyRect() { return new Rect(Screen.width - 170f, 16f, 154f, 54f); }
+
         private void Notify(string title, string detail, float duration = 2.4f, bool success = true)
         {
-            noticeTitle = title; noticeDetail = detail; noticeUntil = Time.unscaledTime + duration; noticeSuccess = success;
+            if (trial == 2) return;
+            noticeTitle = title; noticeDetail = trial == 0 ? detail : "Action complete."; noticeUntil = Time.unscaledTime + duration; noticeSuccess = success;
         }
         private bool ShowTargetLabel(int code)
         {
+            if (trial == 2) return false;
+            if (trial == 1) return (code >= 10 && code < 20) || (code < 3 && phase == Phase.ChooseGlass) || hovered == code;
             if (code >= 10 && code < 20) return true;
             if (toolHeld) return false;
             if (code < 3) return phase == Phase.ChooseGlass || hovered == code;
@@ -1611,6 +1744,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             float required = RequiredAmount(ingredient);
             if (required < 0f) return "Not in recipe";
+            if (trial > 0) return included[ingredient] ? "Added" : "Recipe ingredient";
             if (required > 0f) return ingredientTotals[ingredient].ToString("0.#") + " / " + required.ToString("0.#") + " oz";
             if (ingredient == 6 && recipe == 2) return ((shakerIced ? 1 : 0) + (glassIced ? 1 : 0)) + " / 2 vessels";
             return included[ingredient] ? "ADDED" : ingredient == 6 ? "Add ice" : "Top up";
@@ -1671,7 +1805,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             int ingredient = code - 10;
             bool allowed = RequiredAmount(ingredient) >= 0f;
-            bool done = allowed && !NeedsIngredient(ingredient);
+            bool done = allowed && (trial == 0 ? !NeedsIngredient(ingredient) : included[ingredient]);
             bool activePour = pouring && pourObject == targets[code];
             Rect rect = LabelRect(code);
             Fill(rect, activePour ? new Color(0.22f, 0.17f, 0.06f, 0.98f)
@@ -1680,7 +1814,7 @@ public class BeerGlassPour : MonoBehaviour
             Fill(new Rect(rect.x, rect.y, 3f, rect.height), ingredientMaterials[ingredient].color);
             GUI.Label(new Rect(rect.x + 10f, rect.y + 3f, rect.width - 18f, 23f), ingredientNames[ingredient], ingredientNameStyle);
             GUI.Label(new Rect(rect.x + 10f, rect.y + 26f, rect.width - 18f, 19f),
-                activePour ? "Pouring..." : (done ? "DONE  " : "") + IngredientProgress(ingredient), statusStyle);
+                activePour ? "Pouring..." : (done && trial == 0 ? "DONE  " : "") + IngredientProgress(ingredient), statusStyle);
         }
         private void DrawNotice()
         {
@@ -1713,27 +1847,118 @@ public class BeerGlassPour : MonoBehaviour
             foreach (Material material in materials) if (material != null) UnityEngine.Object.Destroy(material);
             foreach (Mesh mesh in meshes) if (mesh != null) UnityEngine.Object.Destroy(mesh);
         }
+        private void DrawTrialIntro()
+        {
+            Fill(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.8f));
+            float width = Mathf.Min(740f, Screen.width - 32f);
+            Rect panel = new Rect((Screen.width - width) * 0.5f, (Screen.height - 470f) * 0.5f, width, 470f);
+            Fill(panel, panelColor);
+            GUI.Label(new Rect(panel.x + 28f, panel.y + 18f, width - 56f, 30f), recipeNames[recipe], smallStyle);
+            GUI.Label(new Rect(panel.x + 28f, panel.y + 55f, width - 56f, 44f), "TRIAL " + (trial + 1) + " / 3 - " + trialNames[trial], titleStyle);
+            owner.DrawTrialChecks(new Rect(panel.x + 28f, panel.y + 112f, width - 56f, 34f), recipe, smallStyle);
+            GUI.Label(new Rect(panel.x + 28f, panel.y + 162f, width - 56f, 64f), trialDescriptions[trial], bodyStyle);
+            GUI.Label(new Rect(panel.x + 28f, panel.y + 240f, width - 56f, 110f),
+                "Click objects to use them. Flip the jigger with R or click its cups.\nHold LEFT CLICK to stir or shake. Press ENTER to submit.\nESC returns to the bar. Your 45 seconds start after BEGIN.", smallStyle);
+            float buttonWidth = (width - 72f) * 0.5f;
+            if (ActionButton(new Rect(panel.x + 28f, panel.yMax - 76f, buttonWidth, 48f), "BEGIN TRIAL " + (trial + 1), true))
+            {
+                awaitingStart = false;
+                Notify("TRIAL STARTED", "45 seconds. Choose the " + glassNames[recipe] + ".");
+            }
+            if (ActionButton(new Rect(panel.center.x + 8f, panel.yMax - 76f, buttonWidth, 48f), "Back to the bar")) Exit();
+        }
+        private void DrawTrialResult()
+        {
+            Fill(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.8f));
+            bool courseDone = completed && owner.AllTrialsComplete;
+            float width = Mathf.Min(740f, Screen.width - 32f);
+            float height = courseDone ? 500f : 430f;
+            Rect panel = new Rect((Screen.width - width) * 0.5f, (Screen.height - height) * 0.5f, width, height);
+            Fill(panel, panelColor);
+            Fill(new Rect(panel.x, panel.y, width, 5f), completed ? new Color(0.5f, 0.9f, 0.65f) : new Color(1f, 0.56f, 0.3f));
+            string heading = failed ? "TRY AGAIN" : courseDone ? "TRIAL COMPLETE" : "TRIAL " + (trial + 1) + " COMPLETE";
+            GUI.Label(new Rect(panel.x + 28f, panel.y + 24f, width - 56f, 44f), heading, titleStyle);
+            if (courseDone)
+            {
+                GUI.Label(new Rect(panel.x + 28f, panel.y + 82f, width - 56f, 48f), "All three cocktails, all three trials passed.\nOpen the bar?", bodyStyle);
+                for (int recipeIndex = 0; recipeIndex < 3; recipeIndex++)
+                {
+                    float rowY = panel.y + 148f + recipeIndex * 72f;
+                    GUI.Label(new Rect(panel.x + 28f, rowY, width - 56f, 28f), recipeNames[recipeIndex], smallStyle);
+                    owner.DrawTrialChecks(new Rect(panel.x + 28f, rowY + 27f, width - 56f, 34f), recipeIndex, smallStyle);
+                }
+            }
+            else
+            {
+                GUI.Label(new Rect(panel.x + 28f, panel.y + 84f, width - 56f, 104f), failed ? error
+                    : recipeNames[recipe] + " / " + trialNames[trial] + " passed.\n"
+                    + (owner.passedTrials[recipe] < 3 ? "Continue with less guidance in the next trial." : "All trials for this recipe are complete."), bodyStyle);
+                owner.DrawTrialChecks(new Rect(panel.x + 28f, panel.y + 214f, width - 56f, 34f), recipe, smallStyle);
+                GUI.Label(new Rect(panel.x + 28f, panel.y + 268f, width - 56f, 52f), failed
+                    ? "This trial was not checked. Retry with a fresh 45 seconds."
+                    : owner.passedTrials[recipe] >= 3 ? "Return to the table and choose another recipe." : "The next trial starts with a short control reminder.", smallStyle);
+            }
+            float buttonWidth = (width - 72f) * 0.5f;
+            Rect primary = new Rect(panel.x + 28f, panel.yMax - 76f, buttonWidth, 48f);
+            Rect secondary = new Rect(panel.center.x + 8f, panel.yMax - 76f, buttonWidth, 48f);
+            string action = failed ? "RETRY TRIAL " + (trial + 1) : courseDone ? "OPEN THE BAR"
+                : owner.passedTrials[recipe] < 3 ? "NEXT TRIAL" : "BACK TO RECIPES";
+            if (ActionButton(primary, action, true))
+            {
+                if (failed) ResetRound();
+                else if (courseDone) owner.OpenBar();
+                else if (owner.passedTrials[recipe] < 3) { trial = owner.passedTrials[recipe]; ResetRound(); }
+                else Exit();
+            }
+            if (ActionButton(secondary, "Back to the bar")) Exit();
+        }
+        private void DrawMeasureControls()
+        {
+            Rect measures = MeasurePanel(); Fill(measures, panelColor);
+            GUI.Label(new Rect(measures.x + 12f, measures.y + 7f, 278f, 25f), "JIGGER AMOUNT / R TO FLIP", smallStyle);
+            bool previousEnabled = GUI.enabled; GUI.enabled = !pouring && !toolHeld;
+            if (ActionButton(new Rect(measures.x + 12f, measures.y + 38f, 132f, 48f), "0.5 oz", false, measure == 0.5f)) SetMeasure(0.5f);
+            if (ActionButton(new Rect(measures.x + 158f, measures.y + 38f, 132f, 48f), "1 oz", false, measure == 1f)) SetMeasure(1f);
+            GUI.enabled = previousEnabled;
+        }
+        private void DrawRecallHUD()
+        {
+            Fill(new Rect(16f, 16f, Screen.width - 32f, 112f), panelColor);
+            GUI.Label(new Rect(32f, 20f, Screen.width - 330f, 20f), "TRIAL 2 / 3 - INGREDIENT RECALL", smallStyle);
+            GUI.Label(new Rect(32f, 42f, Screen.width - 340f, 34f), recipeNames[recipe], titleStyle);
+            GUI.Label(new Rect(32f, 74f, Screen.width - 326f, 44f), "Glass: " + glassNames[recipe] + ". Use the listed ingredients.", instructionStyle);
+            GUI.Label(new Rect(Screen.width - 270f, 29f, 150f, 43f), remaining.ToString("0.0") + " s", timerStyle);
+            if (ActionButton(new Rect(Screen.width - 112f, 28f, 80f, 32f), "EXIT")) { Exit(); return; }
+            foreach (int code in targets.Keys)
+            {
+                if (!ShowTargetLabel(code)) continue;
+                if (code >= 10 && code < 20) { DrawIngredientTile(code); continue; }
+                Rect rect = LabelRect(code); Fill(rect, panelColor); GUI.Label(rect, TargetName(code), labelStyle);
+            }
+            DrawMeasureControls();
+            Rect hint = new Rect(334f, Screen.height - 118f, Screen.width - 566f, 102f);
+            Fill(hint, panelColor);
+            GUI.Label(new Rect(hint.x + 12f, hint.y + 8f, hint.width - 24f, 35f), "MAKE IT FROM MEMORY", smallStyle);
+            GUI.Label(new Rect(hint.x + 12f, hint.y + 45f, hint.width - 24f, 46f), "Press ENTER or FINISH when you are ready.", smallStyle);
+            if (!pouring && ActionButton(FinishButton(), "FINISH COCKTAIL", true)) TryFinish();
+            DrawNotice();
+        }
         public void Draw()
         {
             if (!IsActive) return;
             EnsureStyles();
-            if (failed || completed)
+            if (awaitingStart) { DrawTrialIntro(); return; }
+            if (failed || completed) { DrawTrialResult(); return; }
+            if (trial == 2)
             {
-                Fill(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.8f));
-                float popupWidth = Mathf.Min(640f, Screen.width - 32f);
-                Rect popup = new Rect((Screen.width - popupWidth) * 0.5f, (Screen.height - 330f) * 0.5f, popupWidth, 330f);
-                Fill(popup, panelColor);
-                Fill(new Rect(popup.x, popup.y, popup.width, 5f), completed ? new Color(0.5f, 0.9f, 0.65f) : new Color(1f, 0.56f, 0.3f));
-                GUI.Label(new Rect(popup.x + 28f, popup.y + 24f, popupWidth - 56f, 48f), completed ? "COCKTAIL COMPLETE" : "RECIPE CHECK", titleStyle);
-                GUI.Label(new Rect(popup.x + 28f, popup.y + 88f, popupWidth - 56f, 128f), completed
-                    ? recipeNames[recipe] + " is ready to serve.\n\nCorrect glass, ingredients, amounts and technique." : error, bodyStyle);
-                float buttonWidth = (popupWidth - 72f) * 0.5f;
-                if (ActionButton(new Rect(popup.x + 28f, popup.yMax - 76f, buttonWidth, 48f), "Retry - 45 seconds", true)) ResetRound();
-                if (ActionButton(new Rect(popup.center.x + 8f, popup.yMax - 76f, buttonWidth, 48f), "Back to the bar")) Exit();
+                Rect timer = TimerOnlyRect();
+                Fill(timer, panelColor);
+                GUI.Label(timer, remaining.ToString("0.0") + " s", timerStyle);
                 return;
             }
+            if (trial == 1) { DrawRecallHUD(); return; }
             Fill(new Rect(16f, 16f, Screen.width - 32f, 112f), panelColor);
-            GUI.Label(new Rect(32f, 20f, Screen.width - 330f, 20f), StageLabel(), smallStyle);
+            GUI.Label(new Rect(32f, 20f, Screen.width - 330f, 20f), "TRIAL 1 / 3 - " + StageLabel(), smallStyle);
             GUI.Label(new Rect(32f, 42f, Screen.width - 340f, 34f), recipeNames[recipe], titleStyle);
             GUI.Label(new Rect(32f, 74f, Screen.width - 326f, 44f), pouring ? "Pouring into the vessel..." : NextInstruction(), instructionStyle);
             Color old = GUI.color; GUI.color = remaining <= 10f ? new Color(1f, 0.44f, 0.32f) : ink;
@@ -1749,14 +1974,7 @@ public class BeerGlassPour : MonoBehaviour
                 Fill(rect, hovered == code ? new Color(0.14f, 0.34f, 0.25f, 0.98f) : panelColor);
                 GUI.Label(rect, TargetName(code), labelStyle);
             }
-            Rect measures = MeasurePanel(); Fill(measures, panelColor);
-            GUI.Label(new Rect(measures.x + 12f, measures.y + 7f, 278f, 25f), "JIGGER AMOUNT", smallStyle);
-            bool previousEnabled = GUI.enabled; GUI.enabled = !pouring && !toolHeld && phase != Phase.Ready;
-            if (ActionButton(new Rect(measures.x + 12f, measures.y + 38f, 132f, 48f), "0.5 oz", false, measure == 0.5f))
-            { measure = 0.5f; Notify("MEASURE SET", "The jigger is set to 0.5 oz.", 1.6f); }
-            if (ActionButton(new Rect(measures.x + 158f, measures.y + 38f, 132f, 48f), "1 oz", false, measure == 1f))
-            { measure = 1f; Notify("MEASURE SET", "The jigger is set to 1 oz.", 1.6f); }
-            GUI.enabled = previousEnabled;
+            DrawMeasureControls();
             Rect progress = new Rect(334f, Screen.height - 118f, Screen.width - 350f, 102f);
             Fill(progress, panelColor);
             if (phase == Phase.Stir || phase == Phase.Shake)
@@ -1772,7 +1990,7 @@ public class BeerGlassPour : MonoBehaviour
             {
                 GUI.Label(new Rect(progress.x + 12f, progress.y + 10f, progress.width - 220f, 32f), pouring ? "FINISHING POUR" : "READY TO SERVE", bodyStyle);
                 GUI.Label(new Rect(progress.x + 12f, progress.y + 47f, progress.width - 220f, 40f), pouring ? "Wait for the pour to finish." : "All checks complete.", smallStyle);
-                if (!pouring && ActionButton(FinishButton(), "FINISH COCKTAIL", true)) completed = true;
+                if (!pouring && ActionButton(FinishButton(), "FINISH COCKTAIL", true)) TryFinish();
             }
             else
             {
@@ -1868,16 +2086,14 @@ public class BeerGlassPour : MonoBehaviour
                 paper[index] = new Material(shader) { color = cream };
                 note.GetComponent<Renderer>().sharedMaterial = paper[index];
                 notes[index] = note;
-                AddNoteText(index, "0" + (index + 1) + "  " + noteTitles[index],
-                    new Vector3(-0.13f, 0.003f, 0.15f), 0.016f);
-                AddNoteText(index, "RECIPE CARD  /  CLICK TO READ",
-                    new Vector3(-0.13f, 0.003f, -0.145f), 0.010f);
+                AddNoteText(index, noteTitles[index],
+                    new Vector3(0f, 0.003f, 0.16f), 0.016f);
                 GameObject art = GameObject.CreatePrimitive(PrimitiveType.Quad);
                 art.name = "CocktailIllustration";
                 art.transform.SetParent(root.transform, false);
                 art.transform.localPosition = note.transform.localPosition + new Vector3(0f, 0.0035f, -0.015f);
                 art.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
-                art.transform.localScale = new Vector3(0.12f, 0.24f, 1f);
+                art.transform.localScale = new Vector3(0.13f, 0.26f, 1f);
                 Collider collider = art.GetComponent<Collider>();
                 collider.enabled = false;
                 UnityEngine.Object.Destroy(collider);
@@ -1914,10 +2130,15 @@ public class BeerGlassPour : MonoBehaviour
             text.font = font;
             text.fontSize = 48;
             text.characterSize = size;
-            text.anchor = TextAnchor.UpperLeft;
+            text.anchor = TextAnchor.UpperCenter;
             text.color = ink;
+            font.RequestCharactersInTexture(content, text.fontSize);
             text.text = content;
-            writing.GetComponent<Renderer>().sharedMaterial = font.material;
+            Renderer renderer = writing.GetComponent<Renderer>();
+            renderer.sharedMaterial = font.material;
+            Bounds bounds = renderer.localBounds;
+            if (bounds.size.x > 0f && bounds.size.y > 0f)
+                writing.transform.localScale = Vector3.one * Mathf.Min(0.26f / bounds.size.x, 0.04f / bounds.size.y);
         }
 
         public void SetAvailable(bool available)
@@ -1960,14 +2181,6 @@ public class BeerGlassPour : MonoBehaviour
             closeFrame = Time.frameCount;
             Cursor.lockState = previousLock;
             Cursor.visible = previousCursorVisible;
-        }
-
-        public void DrawNoteLabels(GUIStyle style)
-        {
-            if (root == null || !root.activeInHierarchy || hovered < 0) return;
-            Vector3 screen = owner.playerCamera.WorldToScreenPoint(notes[hovered].transform.position + Vector3.up * 0.08f);
-            if (screen.z > 0f)
-                GUI.Label(new Rect(screen.x - 100f, Screen.height - screen.y - 35f, 200f, 32f), "READ RECIPE 0" + (hovered + 1), style);
         }
 
         private GUIStyle TextStyle(int size, Font face, Color color, FontStyle weight = FontStyle.Normal)
@@ -2060,10 +2273,11 @@ public class BeerGlassPour : MonoBehaviour
                     if (Button(new Rect(384f + index * 208f, 66f, 200f, 34f), shortTitles[index], selected == index))
                         SwitchTo(index);
                 Fill(new Rect(352f, 112f, 1f, 487f), new Color(0.78f, 0.78f, 0.7f, 0.65f));
-                DrawIllustration(new Rect(36f, 112f, 280f, 403f));
-                Fill(new Rect(64f, 534f, 224f, 32f), new Color(accents[selected].r, accents[selected].g, accents[selected].b, 0.10f));
-                GUI.Label(new Rect(64f, 534f, 224f, 32f), methods[selected], centeredStyle);
-                GUI.Label(new Rect(36f, 577f, 280f, 24f), glasses[selected], centeredStyle);
+                DrawIllustration(new Rect(36f, 112f, 280f, 365f));
+                Fill(new Rect(64f, 493f, 224f, 32f), new Color(accents[selected].r, accents[selected].g, accents[selected].b, 0.10f));
+                GUI.Label(new Rect(64f, 493f, 224f, 32f), methods[selected], centeredStyle);
+                GUI.Label(new Rect(36f, 535f, 280f, 28f), glasses[selected], centeredStyle);
+                owner.DrawTrialChecks(new Rect(36f, 573f, 280f, 34f), selected, smallStyle);
                 GUI.Label(new Rect(384f, 119f, 620f, 53f), titles[selected], titleStyle);
                 GUI.Label(new Rect(384f, 180f, 620f, 28f), "Any ingredient order. Match quantities and technique.", smallStyle);
 
@@ -2098,9 +2312,13 @@ public class BeerGlassPour : MonoBehaviour
                 GUILayout.EndArea();
 
                 Fill(new Rect(36f, 614f, 968f, 1f), new Color(0.78f, 0.78f, 0.7f));
-                if (Button(new Rect(36f, 622f, 280f, 42f), "Start to make", true))
+                string startLabel = owner.AllTrialsComplete && !owner.barOpened ? "Open the bar?"
+                    : owner.passedTrials[selected] >= 3 ? "Practice again" : owner.passedTrials[selected] == 0
+                    ? "Start to make" : "Start trial " + (owner.passedTrials[selected] + 1);
+                if (Button(new Rect(36f, 622f, 280f, 42f), startLabel, true))
                 {
-                    owner.BeginPractice(selected);
+                    if (owner.AllTrialsComplete && !owner.barOpened) owner.OpenBar();
+                    else owner.BeginPractice(selected);
                     GUIUtility.ExitGUI();
                 }
                 if (Button(new Rect(384f, 622f, 155f, 42f), "<  PREVIOUS")) SwitchTo(selected - 1);
