@@ -43,6 +43,13 @@ public class BarPlayerMovement : MonoBehaviour
         view = camera.transform;
     }
 
+    public void ResetViewPitch()
+    {
+        pitch = 0f;
+        if (view != null)
+            view.localRotation = Quaternion.identity;
+    }
+
     void Update()
     {
         if (!boundariesReady)

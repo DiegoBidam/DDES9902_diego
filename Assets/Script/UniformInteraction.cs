@@ -180,7 +180,10 @@ public class UniformInteraction : MonoBehaviour
                 controller.enabled = false;
 
             transform.position = beerStageSpawn.position;
-            transform.rotation = beerStageSpawn.rotation;
+            // 현재 스폰은 출입구 쪽을 향하므로 바 안쪽으로 돌아서 시작합니다.
+            transform.rotation = beerStageSpawn.rotation * Quaternion.Euler(0f, 180f, 0f);
+            if (movement != null)
+                movement.ResetViewPitch();
 
             if (controller != null)
                 controller.enabled = true;
