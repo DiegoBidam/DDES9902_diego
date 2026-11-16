@@ -58,6 +58,11 @@ public class BeerGlassPour : MonoBehaviour
 
     private string prompt = "";
     private GUIStyle textStyle;
+    private string actionTitle = "";
+    private string actionDetail = "";
+    private float actionUntil;
+    private GUIStyle actionTitleStyle;
+    private GUIStyle actionDetailStyle;
 
     void Start()
     {
@@ -216,6 +221,7 @@ public class BeerGlassPour : MonoBehaviour
         glass.transform.localScale = originalLocalScale;
 
         SetVisible(glass, true);
+        ShowAction("GLASS PICKED UP", glass == schoonerGlass ? "Schooner selected." : "Pint selected.");
     }
 
     void DropGlass()
@@ -238,6 +244,7 @@ public class BeerGlassPour : MonoBehaviour
 
         heldGlass = null;
         heldColliders = null;
+        ShowAction("GLASS RETURNED", "The glass is back in its original place.", 1.8f);
     }
 
     void CheckPouring()
@@ -318,6 +325,7 @@ public class BeerGlassPour : MonoBehaviour
         filled[index] = true;
         CreateFilledVisual(index);
         pouring = false;
+        ShowAction("BEER READY", "Filling complete. Place the glass on the glowing SERVE marker.", 3f);
     }
 
     GameObject GetPourVisualForHeldGlass()
@@ -444,6 +452,8 @@ public class BeerGlassPour : MonoBehaviour
         heldGlass = null;
         heldColliders = null;
         prompt = TaskCompleted ? "Order complete! Both beers served." : "Beer served! Prepare the other glass.";
+        ShowAction(TaskCompleted ? "BEER TASK COMPLETE" : "BEER SERVED - 1 / 2",
+            TaskCompleted ? "Both glasses served. The cocktail recipe cards are now available." : "One glass served. Prepare the remaining glass.", 3f);
     }
 
     void CreateServiceMarker()
@@ -676,6 +686,32 @@ public class BeerGlassPour : MonoBehaviour
             prompt,
             textStyle
         );
+        DrawActionFeedback();
+    }
+
+    void ShowAction(string title, string detail, float duration = 2.2f)
+    {
+        actionTitle = title; actionDetail = detail; actionUntil = Time.unscaledTime + duration;
+    }
+
+    void DrawActionFeedback()
+    {
+        if (Time.unscaledTime >= actionUntil) return;
+        if (actionTitleStyle == null)
+        {
+            actionTitleStyle = new GUIStyle(GUI.skin.label) { fontSize = 24, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft, padding = new RectOffset(0, 0, 0, 0) };
+            actionTitleStyle.normal.textColor = new Color(0.8f, 1f, 0.88f);
+            actionDetailStyle = new GUIStyle(GUI.skin.label) { fontSize = 17, wordWrap = true, alignment = TextAnchor.UpperLeft, padding = new RectOffset(0, 0, 0, 0) };
+            actionDetailStyle.normal.textColor = Color.white;
+        }
+        float width = Mathf.Min(640f, Screen.width - 32f);
+        Rect panel = new Rect((Screen.width - width) * 0.5f, Screen.height - 216f, width, 88f);
+        Color old = GUI.color;
+        GUI.color = new Color(0.025f, 0.13f, 0.11f, 0.96f); GUI.DrawTexture(panel, Texture2D.whiteTexture);
+        GUI.color = new Color(0.4f, 0.9f, 0.6f); GUI.DrawTexture(new Rect(panel.x, panel.y, 5f, panel.height), Texture2D.whiteTexture);
+        GUI.color = old;
+        GUI.Label(new Rect(panel.x + 18f, panel.y + 7f, width - 36f, 33f), actionTitle, actionTitleStyle);
+        GUI.Label(new Rect(panel.x + 18f, panel.y + 43f, width - 36f, 40f), actionDetail, actionDetailStyle);
     }
 
     void BeginPractice(int recipe)
@@ -866,6 +902,7 @@ public class BeerGlassPour : MonoBehaviour
                     tool.localPosition = slots[held];
                     tool.localRotation = Quaternion.identity;
                     tool.GetComponent<Collider>().enabled = true;
+                    owner.ShowAction("TOOL RETURNED", names[held] + " is back on the table.");
                     held = -1;
                 }
                 return true;
@@ -885,6 +922,7 @@ public class BeerGlassPour : MonoBehaviour
                     tool.SetParent(owner.playerCamera.transform, false);
                     tool.localPosition = new Vector3(0.24f, -0.3f, 0.65f);
                     tool.localRotation = Quaternion.Euler(-12f, 0f, 0f);
+                    owner.ShowAction("TOOL PICKED UP", names[index] + " selected.");
                 }
                 return true;
             }
@@ -931,8 +969,10 @@ public class BeerGlassPour : MonoBehaviour
         private readonly float[] ingredientTotals = new float[10];
         private readonly bool[] included = new bool[10];
         private bool shakerIced, glassIced, stirred, shaken, transferred;
-        private string feedback = "";
-        private float feedbackUntil;
+        private string noticeTitle = "", noticeDetail = "";
+        private float noticeUntil;
+        private bool noticeSuccess;
+        private string pendingPourTitle = "", pendingPourDetail = "";
         private readonly float[] glassHeights = { 0.16f, 0.20f, 0.32f };
         private readonly Color ink = new Color(0.89f, 0.94f, 0.92f);
         private readonly Color panelColor = new Color(0.035f, 0.085f, 0.09f, 0.94f);
@@ -968,6 +1008,7 @@ public class BeerGlassPour : MonoBehaviour
         private float pourTime, pourBoost;
         private Vector3 stirStart, shakerStart;
         private GUIStyle bodyStyle, titleStyle, smallStyle, labelStyle, buttonStyle, timerStyle;
+        private GUIStyle ingredientNameStyle, statusStyle, countStyle, noticeTitleStyle, instructionStyle, timerCaptionStyle;
         public bool IsActive { get; private set; }
 
         public CocktailPractice(BeerGlassPour owner, int recipe)
@@ -1233,10 +1274,11 @@ public class BeerGlassPour : MonoBehaviour
             System.Array.Clear(ingredientTotals, 0, ingredientTotals.Length);
             System.Array.Clear(included, 0, included.Length);
             shakerIced = false; glassIced = false; stirred = false; shaken = false; transferred = false;
-            feedback = ""; feedbackUntil = 0f;
+            noticeUntil = 0f; pendingPourTitle = ""; pendingPourDetail = "";
             strokes = 0; travel = 0f; travelDirection = 0; lastStrokeDirection = 0;
             failed = false; completed = false; error = ""; measure = 1f; remaining = RoundSeconds;
             hovered = -1;
+            Notify("PRACTICE STARTED", "45 seconds. Choose the " + glassNames[recipe] + ".");
         }
 
         private float RequiredAmount(int ingredient)
@@ -1284,21 +1326,21 @@ public class BeerGlassPour : MonoBehaviour
 
         private string NextInstruction()
         {
-            if (Time.unscaledTime < feedbackUntil) return feedback;
             switch (phase)
             {
                 case Phase.ChooseGlass: return "Choose the " + glassNames[recipe] + ".";
-                case Phase.Stir: return toolHeld ? "Hold LEFT CLICK and move LEFT / RIGHT. Complete 15 round trips." : "Ingredients complete. Click the stirring stick.";
-                case Phase.Shake: return toolHeld ? "Hold LEFT CLICK and move UP / DOWN. Complete 15 round trips." : "Shaker ready. Click it to shake; other ingredients can be added in any order.";
+                case Phase.Stir: return toolHeld ? "Stir for 15 full left / right round trips." : "Ingredients complete. Click the stirring stick.";
+                case Phase.Shake: return toolHeld ? "Shake for 15 full up / down round trips." : "Shaker ready. Click it to start shaking.";
                 case Phase.GlassIce: return "Click Ice to add ice to your serving glass.";
                 case Phase.Transfer: return "Click the shaker to pour into the iced long-drink glass.";
                 case Phase.Ready: return "Your cocktail is ready. Click FINISH.";
-                default: return "Add the required ingredients in ANY ORDER. Match the totals shown on each label.";
+                default: return "Add ingredients in ANY ORDER. Match the totals below.";
             }
         }
 
         private void Fail(string message)
         {
+            noticeUntil = 0f;
             error = message; failed = true; StopPour(false); ReturnTool();
         }
 
@@ -1312,8 +1354,7 @@ public class BeerGlassPour : MonoBehaviour
             }
             if (required == 0f && !NeedsIngredient(ingredient))
             {
-                feedback = ingredientNames[ingredient] + " is already added. No extra amount was added.";
-                feedbackUntil = Time.unscaledTime + 2f;
+                Notify("ALREADY ADDED", ingredientNames[ingredient] + " is already in the drink. Nothing extra was added.", 2f, false);
                 return;
             }
             if (required > 0f && ingredientTotals[ingredient] + measure > required + 0.001f)
@@ -1323,14 +1364,19 @@ public class BeerGlassPour : MonoBehaviour
             }
             if (ingredient == 6)
             {
-                if (recipe == 2 && !shakerIced) { AddIce(shaker); shakerIced = true; }
+                bool intoShaker = recipe == 2 && !shakerIced;
+                if (intoShaker) { AddIce(shaker); shakerIced = true; }
                 else { AddIce(glassObjects[selectedGlass]); glassIced = true; }
+                Notify("ICE ADDED", intoShaker ? "Ice is in the shaker." : "Ice is in your serving glass.");
             }
             else
             {
                 GameObject vessel = recipe == 2 && ingredient >= 0 && ingredient <= 3 ? shaker : glassObjects[selectedGlass];
                 float boost = required > 0f ? 0.028f * measure / required : 0.07f;
-                BeginPour(targets[10 + ingredient], vessel, ingredientMaterials[ingredient], boost);
+                string result = required > 0f ? measure.ToString("0.#") + " oz added. Total: "
+                    + (ingredientTotals[ingredient] + measure).ToString("0.#") + " / " + required.ToString("0.#") + " oz." : "Top-up complete.";
+                BeginPour(targets[10 + ingredient], vessel, ingredientMaterials[ingredient], boost,
+                    ingredientNames[ingredient].ToUpperInvariant() + " ADDED", result);
                 if (required > 0f) ingredientTotals[ingredient] += measure;
             }
             included[ingredient] = true;
@@ -1348,8 +1394,10 @@ public class BeerGlassPour : MonoBehaviour
             }
         }
 
-        private void BeginPour(GameObject bottle, GameObject vessel, Material material, float boost)
+        private void BeginPour(GameObject bottle, GameObject vessel, Material material, float boost,
+            string completionTitle, string completionDetail)
         {
+            pendingPourTitle = completionTitle; pendingPourDetail = completionDetail;
             pouring = true; pourTime = 0f; pourObject = bottle; pourTarget = vessel; pourBoost = boost;
             pourStartPosition = bottle.transform.localPosition; pourStartRotation = bottle.transform.localRotation;
             stream.GetComponent<Renderer>().sharedMaterial = material;
@@ -1387,6 +1435,8 @@ public class BeerGlassPour : MonoBehaviour
             }
             if (apply && pourObject == shaker) { fills[3].SetActive(false); levels[3] = 0f; }
             pouring = false; pourObject = null; pourTarget = null;
+            if (apply) Notify(pendingPourTitle, pendingPourDetail);
+            pendingPourTitle = ""; pendingPourDetail = "";
         }
 
         private void SelectTarget(int code)
@@ -1396,17 +1446,21 @@ public class BeerGlassPour : MonoBehaviour
             {
                 if (phase != Phase.ChooseGlass) return;
                 if (code != recipe) { Fail("Incorrect glass.\nChoose the " + glassNames[recipe] + " for " + recipeNames[recipe] + "."); return; }
-                selectedGlass = code; rings[code].SetActive(true); phase = Phase.Build; return;
+                selectedGlass = code; rings[code].SetActive(true); phase = Phase.Build;
+                Notify("GLASS SELECTED", glassNames[code] + " is ready. Add your ingredients."); return;
             }
             if (phase == Phase.Transfer && code == 31)
             {
                 shakerLid.SetActive(false);
-                BeginPour(shaker, glassObjects[selectedGlass], liquid, 0.15f);
+                BeginPour(shaker, glassObjects[selectedGlass], liquid, 0.15f,
+                    "POUR COMPLETE", "The shaker mixture is now in your serving glass.");
                 transferred = true; RefreshPhase(); return;
             }
             if ((phase == Phase.Stir && code == 30) || (phase == Phase.Shake && code == 31))
             {
                 toolHeld = true; toolPickedFrame = Time.frameCount; travel = 0f; travelDirection = 0; toolOffset = 0f;
+                Notify(phase == Phase.Stir ? "STIRRING STICK PICKED UP" : "SHAKER PICKED UP",
+                    phase == Phase.Stir ? "Hold LEFT CLICK and move left / right." : "Hold LEFT CLICK and move up / down.", 2f);
                 if (phase == Phase.Stir)
                     stirrer.transform.position = glassObjects[selectedGlass].transform.position + Vector3.up * 0.015f;
                 else
@@ -1439,6 +1493,7 @@ public class BeerGlassPour : MonoBehaviour
                 ReturnTool();
                 if (wasStirring) stirred = true; else shaken = true;
                 RefreshPhase();
+                Notify(wasStirring ? "STIRRING COMPLETE" : "SHAKING COMPLETE", "15 / 15 round trips. " + NextInstruction(), 3f);
             }
         }
 
@@ -1479,7 +1534,7 @@ public class BeerGlassPour : MonoBehaviour
             {
                 int index = code - 10;
                 float cellWidth = (Screen.width - 32f) / 5f;
-                return new Rect(16f + index % 5 * cellWidth, 144f + index / 5 * 40f, cellWidth - 6f, 36f);
+                return new Rect(16f + index % 5 * cellWidth, 136f + index / 5 * 54f, cellWidth - 6f, 48f);
             }
             GameObject target = targets[code];
             float height = code >= 10 && code < 20 ? (code == 16 ? 0.17f : 0.49f) : -0.03f;
@@ -1534,26 +1589,108 @@ public class BeerGlassPour : MonoBehaviour
             hovered = -1;
             if (OverUI(guiPointer)) return;
             foreach (int code in targets.Keys)
-                if (LabelRect(code).Contains(guiPointer)) { hovered = code; break; }
+                if (ShowTargetLabel(code) && LabelRect(code).Contains(guiPointer)) { hovered = code; break; }
             if (hovered < 0 && Physics.Raycast(camera.ScreenPointToRay(pointer), out RaycastHit hit, 8f,
                 1 << Layer, QueryTriggerInteraction.Ignore) && hitTargets.TryGetValue(hit.collider, out int found)) hovered = found;
             if (hovered >= 0 && owner.PressedLeftClick()) SelectTarget(hovered);
         }
 
+        private void Notify(string title, string detail, float duration = 2.4f, bool success = true)
+        {
+            noticeTitle = title; noticeDetail = detail; noticeUntil = Time.unscaledTime + duration; noticeSuccess = success;
+        }
+        private bool ShowTargetLabel(int code)
+        {
+            if (code >= 10 && code < 20) return true;
+            if (toolHeld) return false;
+            if (code < 3) return phase == Phase.ChooseGlass || hovered == code;
+            return hovered == code || (code == 30 && phase == Phase.Stir)
+                || (code == 31 && (phase == Phase.Shake || phase == Phase.Transfer));
+        }
+        private string IngredientProgress(int ingredient)
+        {
+            float required = RequiredAmount(ingredient);
+            if (required < 0f) return "Not in recipe";
+            if (required > 0f) return ingredientTotals[ingredient].ToString("0.#") + " / " + required.ToString("0.#") + " oz";
+            if (ingredient == 6 && recipe == 2) return ((shakerIced ? 1 : 0) + (glassIced ? 1 : 0)) + " / 2 vessels";
+            return included[ingredient] ? "ADDED" : ingredient == 6 ? "Add ice" : "Top up";
+        }
+        private int CompletedIngredientCount()
+        {
+            int count = 0;
+            foreach (int ingredient in recipeIngredients[recipe]) if (!NeedsIngredient(ingredient)) count++;
+            return count;
+        }
+        private string StageLabel()
+        {
+            switch (phase)
+            {
+                case Phase.ChooseGlass: return "SELECT YOUR GLASS";
+                case Phase.Stir: return "STIR THE COCKTAIL";
+                case Phase.Shake: return "SHAKE THE MIXTURE";
+                case Phase.GlassIce: return "ADD SERVING ICE";
+                case Phase.Transfer: return "POUR INTO THE GLASS";
+                case Phase.TopUp: return "FINAL INGREDIENTS";
+                case Phase.Ready: return "READY TO FINISH";
+                default: return "ADD YOUR INGREDIENTS";
+            }
+        }
         private void EnsureStyles()
         {
             if (bodyStyle != null) return;
-            bodyStyle = new GUIStyle(GUI.skin.label) { fontSize = 17, wordWrap = true, alignment = TextAnchor.MiddleLeft };
+            bodyStyle = new GUIStyle(GUI.skin.label) { fontSize = 19, wordWrap = true, alignment = TextAnchor.MiddleLeft, padding = new RectOffset(0, 0, 0, 0) };
             bodyStyle.normal.textColor = ink;
-            titleStyle = new GUIStyle(bodyStyle) { fontSize = 25, fontStyle = FontStyle.Bold };
-            smallStyle = new GUIStyle(bodyStyle) { fontSize = 13 };
-            labelStyle = new GUIStyle(bodyStyle) { fontSize = 12, alignment = TextAnchor.MiddleCenter };
-            buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 16, fontStyle = FontStyle.Bold, wordWrap = true };
-            timerStyle = new GUIStyle(titleStyle) { alignment = TextAnchor.MiddleRight };
+            titleStyle = new GUIStyle(bodyStyle) { fontSize = 26, fontStyle = FontStyle.Bold };
+            smallStyle = new GUIStyle(bodyStyle) { fontSize = 15 };
+            instructionStyle = new GUIStyle(bodyStyle) { fontSize = 18 };
+            timerCaptionStyle = new GUIStyle(bodyStyle) { fontSize = 13, alignment = TextAnchor.MiddleRight };
+            labelStyle = new GUIStyle(bodyStyle) { fontSize = 14, alignment = TextAnchor.MiddleCenter };
+            ingredientNameStyle = new GUIStyle(bodyStyle) { fontSize = 16, fontStyle = FontStyle.Bold, wordWrap = false };
+            statusStyle = new GUIStyle(bodyStyle) { fontSize = 14 };
+            statusStyle.normal.textColor = new Color(0.65f, 0.76f, 0.73f);
+            buttonStyle = new GUIStyle(GUI.skin.label) { fontSize = 18, fontStyle = FontStyle.Bold, wordWrap = true, alignment = TextAnchor.MiddleCenter };
+            buttonStyle.normal.textColor = ink;
+            buttonStyle.hover.textColor = Color.white;
+            buttonStyle.active.textColor = new Color(0.6f, 1f, 0.75f);
+            timerStyle = new GUIStyle(titleStyle) { fontSize = 32, alignment = TextAnchor.MiddleRight };
+            countStyle = new GUIStyle(titleStyle) { fontSize = 23, alignment = TextAnchor.MiddleRight };
+            noticeTitleStyle = new GUIStyle(titleStyle) { fontSize = 23 };
+            noticeTitleStyle.normal.textColor = new Color(0.76f, 1f, 0.85f);
         }
         private static void Fill(Rect rect, Color color)
         {
             Color old = GUI.color; GUI.color = color; GUI.DrawTexture(rect, Texture2D.whiteTexture); GUI.color = old;
+        }
+        private bool ActionButton(Rect rect, string text, bool primary = false, bool selected = false)
+        {
+            Fill(rect, primary || selected ? new Color(0.16f, 0.39f, 0.29f) : new Color(0.10f, 0.17f, 0.18f));
+            Fill(new Rect(rect.x, rect.yMax - 2f, rect.width, 2f), primary || selected ? new Color(0.5f, 0.9f, 0.65f) : new Color(0.24f, 0.34f, 0.33f));
+            return GUI.Button(rect, text, buttonStyle);
+        }
+        private void DrawIngredientTile(int code)
+        {
+            int ingredient = code - 10;
+            bool allowed = RequiredAmount(ingredient) >= 0f;
+            bool done = allowed && !NeedsIngredient(ingredient);
+            bool activePour = pouring && pourObject == targets[code];
+            Rect rect = LabelRect(code);
+            Fill(rect, activePour ? new Color(0.22f, 0.17f, 0.06f, 0.98f)
+                : hovered == code ? new Color(0.15f, 0.29f, 0.25f, 0.98f) : done
+                ? new Color(0.07f, 0.20f, 0.15f, 0.97f) : new Color(0.035f, 0.10f, 0.11f, 0.97f));
+            Fill(new Rect(rect.x, rect.y, 3f, rect.height), ingredientMaterials[ingredient].color);
+            GUI.Label(new Rect(rect.x + 10f, rect.y + 3f, rect.width - 18f, 23f), ingredientNames[ingredient], ingredientNameStyle);
+            GUI.Label(new Rect(rect.x + 10f, rect.y + 26f, rect.width - 18f, 19f),
+                activePour ? "Pouring..." : (done ? "DONE  " : "") + IngredientProgress(ingredient), statusStyle);
+        }
+        private void DrawNotice()
+        {
+            if (Time.unscaledTime >= noticeUntil) return;
+            float width = Mathf.Min(640f, Screen.width - 32f);
+            Rect rect = new Rect((Screen.width - width) * 0.5f, Screen.height - 220f, width, 84f);
+            Fill(rect, noticeSuccess ? new Color(0.035f, 0.18f, 0.13f, 0.98f) : new Color(0.22f, 0.17f, 0.08f, 0.98f));
+            Fill(new Rect(rect.x, rect.y, 5f, rect.height), noticeSuccess ? new Color(0.5f, 0.95f, 0.65f) : new Color(1f, 0.77f, 0.35f));
+            GUI.Label(new Rect(rect.x + 18f, rect.y + 5f, width - 36f, 32f), noticeTitle, noticeTitleStyle);
+            GUI.Label(new Rect(rect.x + 18f, rect.y + 39f, width - 36f, 40f), noticeDetail, smallStyle);
         }
         private void Exit()
         {
@@ -1582,53 +1719,71 @@ public class BeerGlassPour : MonoBehaviour
             EnsureStyles();
             if (failed || completed)
             {
-                Fill(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.76f));
-                float width = Mathf.Min(600f, Screen.width - 32f);
-                Rect popup = new Rect((Screen.width - width) * 0.5f, (Screen.height - 300f) * 0.5f, width, 300f);
+                Fill(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.8f));
+                float popupWidth = Mathf.Min(640f, Screen.width - 32f);
+                Rect popup = new Rect((Screen.width - popupWidth) * 0.5f, (Screen.height - 330f) * 0.5f, popupWidth, 330f);
                 Fill(popup, panelColor);
-                GUI.Label(new Rect(popup.x + 26f, popup.y + 20f, width - 52f, 50f), completed ? "COCKTAIL COMPLETE" : "TRY AGAIN", titleStyle);
-                GUI.Label(new Rect(popup.x + 26f, popup.y + 80f, width - 52f, 120f), completed
-                    ? recipeNames[recipe] + " is ready to serve.\nCorrect glass, ingredients and method!" : error, bodyStyle);
-                if (GUI.Button(new Rect(popup.x + 26f, popup.yMax - 70f, (width - 68f) * 0.5f, 44f), "Retry - 45 seconds", buttonStyle)) ResetRound();
-                if (GUI.Button(new Rect(popup.center.x + 8f, popup.yMax - 70f, (width - 68f) * 0.5f, 44f), "Back to the bar", buttonStyle)) Exit();
+                Fill(new Rect(popup.x, popup.y, popup.width, 5f), completed ? new Color(0.5f, 0.9f, 0.65f) : new Color(1f, 0.56f, 0.3f));
+                GUI.Label(new Rect(popup.x + 28f, popup.y + 24f, popupWidth - 56f, 48f), completed ? "COCKTAIL COMPLETE" : "RECIPE CHECK", titleStyle);
+                GUI.Label(new Rect(popup.x + 28f, popup.y + 88f, popupWidth - 56f, 128f), completed
+                    ? recipeNames[recipe] + " is ready to serve.\n\nCorrect glass, ingredients, amounts and technique." : error, bodyStyle);
+                float buttonWidth = (popupWidth - 72f) * 0.5f;
+                if (ActionButton(new Rect(popup.x + 28f, popup.yMax - 76f, buttonWidth, 48f), "Retry - 45 seconds", true)) ResetRound();
+                if (ActionButton(new Rect(popup.center.x + 8f, popup.yMax - 76f, buttonWidth, 48f), "Back to the bar")) Exit();
                 return;
             }
-            Fill(new Rect(16f, 16f, Screen.width - 32f, 116f), panelColor);
-            GUI.Label(new Rect(34f, 26f, Screen.width - 340f, 36f), recipeNames[recipe] + " / PRACTICE", titleStyle);
-            GUI.Label(new Rect(34f, 68f, Screen.width - 290f, 48f), pouring ? "Pouring..." : NextInstruction(), bodyStyle);
-            Color old = GUI.color; GUI.color = remaining <= 10f ? new Color(1f, 0.4f, 0.3f) : ink;
-            GUI.Label(new Rect(Screen.width - 235f, 65f, 195f, 38f), remaining.ToString("0.0") + " s / 45", timerStyle); GUI.color = old;
-            Fill(new Rect(34f, 120f, (Screen.width - 68f) * remaining / RoundSeconds, 3f), remaining <= 10f ? Color.red : new Color(0.4f, 0.8f, 0.6f));
-            if (GUI.Button(new Rect(Screen.width - 116f, 28f, 82f, 28f), "Exit [Esc]", buttonStyle)) { Exit(); return; }
+            Fill(new Rect(16f, 16f, Screen.width - 32f, 112f), panelColor);
+            GUI.Label(new Rect(32f, 20f, Screen.width - 330f, 20f), StageLabel(), smallStyle);
+            GUI.Label(new Rect(32f, 42f, Screen.width - 340f, 34f), recipeNames[recipe], titleStyle);
+            GUI.Label(new Rect(32f, 74f, Screen.width - 326f, 44f), pouring ? "Pouring into the vessel..." : NextInstruction(), instructionStyle);
+            Color old = GUI.color; GUI.color = remaining <= 10f ? new Color(1f, 0.44f, 0.32f) : ink;
+            GUI.Label(new Rect(Screen.width - 270f, 29f, 150f, 43f), remaining.ToString("0.0") + " s", timerStyle); GUI.color = old;
+            GUI.Label(new Rect(Screen.width - 270f, 77f, 150f, 24f), "SECONDS LEFT / 45", timerCaptionStyle);
+            Fill(new Rect(32f, 124f, (Screen.width - 64f) * remaining / RoundSeconds, 3f), remaining <= 10f ? new Color(1f, 0.44f, 0.32f) : new Color(0.4f, 0.8f, 0.6f));
+            if (ActionButton(new Rect(Screen.width - 112f, 28f, 80f, 32f), "EXIT")) { Exit(); return; }
             foreach (int code in targets.Keys)
             {
+                if (!ShowTargetLabel(code)) continue;
+                if (code >= 10 && code < 20) { DrawIngredientTile(code); continue; }
                 Rect rect = LabelRect(code);
-                bool expected = (phase == Phase.ChooseGlass && code == recipe) || (code >= 10 && code < 20 && NeedsIngredient(code - 10))
-                    || (phase == Phase.Stir && code == 30) || ((phase == Phase.Shake || phase == Phase.Transfer) && code == 31);
-                Fill(rect, code == hovered ? new Color(0.2f, 0.4f, 0.32f, 0.95f) : new Color(0.03f, 0.08f, 0.08f, 0.86f));
-                if (code >= 10 && code < 20) Fill(new Rect(rect.x, rect.y, 3f, rect.height), ingredientMaterials[code - 10].color);
-                Color previous = GUI.color; if (expected) GUI.color = new Color(0.6f, 1f, 0.72f);
-                GUI.Label(rect, TargetName(code), labelStyle); GUI.color = previous;
+                Fill(rect, hovered == code ? new Color(0.14f, 0.34f, 0.25f, 0.98f) : panelColor);
+                GUI.Label(rect, TargetName(code), labelStyle);
             }
             Rect measures = MeasurePanel(); Fill(measures, panelColor);
-            GUI.Label(new Rect(measures.x + 12f, measures.y + 7f, 278f, 26f), "JIGGER MEASURE", smallStyle);
-            bool canMeasure = !pouring && !toolHeld;
-            bool previousEnabled = GUI.enabled; GUI.enabled = canMeasure;
-            if (GUI.Button(new Rect(measures.x + 12f, measures.y + 38f, 132f, 48f), (measure == 0.5f ? "SELECTED\n" : "") + "0.5 oz", buttonStyle)) measure = 0.5f;
-            if (GUI.Button(new Rect(measures.x + 158f, measures.y + 38f, 132f, 48f), (measure == 1f ? "SELECTED\n" : "") + "1 oz", buttonStyle)) measure = 1f;
+            GUI.Label(new Rect(measures.x + 12f, measures.y + 7f, 278f, 25f), "JIGGER AMOUNT", smallStyle);
+            bool previousEnabled = GUI.enabled; GUI.enabled = !pouring && !toolHeld && phase != Phase.Ready;
+            if (ActionButton(new Rect(measures.x + 12f, measures.y + 38f, 132f, 48f), "0.5 oz", false, measure == 0.5f))
+            { measure = 0.5f; Notify("MEASURE SET", "The jigger is set to 0.5 oz.", 1.6f); }
+            if (ActionButton(new Rect(measures.x + 158f, measures.y + 38f, 132f, 48f), "1 oz", false, measure == 1f))
+            { measure = 1f; Notify("MEASURE SET", "The jigger is set to 1 oz.", 1.6f); }
             GUI.enabled = previousEnabled;
+            Rect progress = new Rect(334f, Screen.height - 118f, Screen.width - 350f, 102f);
+            Fill(progress, panelColor);
             if (phase == Phase.Stir || phase == Phase.Shake)
             {
-                Rect progress = new Rect(334f, Screen.height - 110f, Mathf.Max(200f, Screen.width - 350f), 94f); Fill(progress, panelColor);
-                GUI.Label(new Rect(progress.x + 12f, progress.y + 8f, progress.width - 24f, 32f),
-                    (phase == Phase.Stir ? "STIR LEFT / RIGHT: " : "SHAKE UP / DOWN: ") + (strokes / 2) + " / 15 ROUND TRIPS", bodyStyle);
-                GUI.Label(new Rect(progress.x + 12f, progress.y + 42f, progress.width - 24f, 42f),
-                    toolHeld ? "Hold LEFT CLICK and drag. Tiny movements do not count." : "Click the highlighted tool, then hold LEFT CLICK and drag.", smallStyle);
+                GUI.Label(new Rect(progress.x + 12f, progress.y + 7f, progress.width - 130f, 30f), phase == Phase.Stir ? "STIRRING" : "SHAKING", titleStyle);
+                GUI.Label(new Rect(progress.xMax - 112f, progress.y + 7f, 100f, 30f), (strokes / 2) + " / 15", countStyle);
+                string gesture = phase == Phase.Stir ? "left / right" : "up / down";
+                GUI.Label(new Rect(progress.x + 12f, progress.y + 41f, progress.width - 24f, 32f), toolHeld
+                    ? "Hold LEFT CLICK and move " + gesture + "." : "Click the highlighted tool to start.", smallStyle);
+                Fill(new Rect(progress.x + 12f, progress.y + 83f, (progress.width - 24f) * Mathf.Clamp01(strokes / 30f), 7f), new Color(0.4f, 0.85f, 0.6f));
             }
-            if (phase != Phase.Stir && phase != Phase.Shake && phase != Phase.Ready)
-                GUI.Label(new Rect(334f, Screen.height - 102f, Mathf.Max(200f, Screen.width - 350f), 82f),
-                    "Click bottles or their labels. ANY ORDER is allowed.\nMeasured amounts add up: 0.5 + 0.5 = 1 oz.\nESC returns to the bar.", smallStyle);
-            if (phase == Phase.Ready && !pouring && GUI.Button(FinishButton(), "FINISH", buttonStyle)) completed = true;
+            else if (phase == Phase.Ready)
+            {
+                GUI.Label(new Rect(progress.x + 12f, progress.y + 10f, progress.width - 220f, 32f), pouring ? "FINISHING POUR" : "READY TO SERVE", bodyStyle);
+                GUI.Label(new Rect(progress.x + 12f, progress.y + 47f, progress.width - 220f, 40f), pouring ? "Wait for the pour to finish." : "All checks complete.", smallStyle);
+                if (!pouring && ActionButton(FinishButton(), "FINISH COCKTAIL", true)) completed = true;
+            }
+            else
+            {
+                int done = CompletedIngredientCount(); int total = recipeIngredients[recipe].Length;
+                GUI.Label(new Rect(progress.x + 12f, progress.y + 7f, progress.width - 130f, 30f), "RECIPE PROGRESS", bodyStyle);
+                GUI.Label(new Rect(progress.xMax - 112f, progress.y + 7f, 100f, 30f), done + " / " + total, countStyle);
+                GUI.Label(new Rect(progress.x + 12f, progress.y + 41f, progress.width - 24f, 32f), phase == Phase.ChooseGlass
+                    ? "Choose your glass to begin." : "Any ingredient order. Match the amounts above.", smallStyle);
+                Fill(new Rect(progress.x + 12f, progress.y + 83f, (progress.width - 24f) * done / total, 7f), new Color(0.4f, 0.85f, 0.6f));
+            }
+            DrawNotice();
         }
         public void Dispose()
         {
@@ -1675,6 +1830,7 @@ public class BeerGlassPour : MonoBehaviour
         private Texture2D illustration;
         private int selected = -1;
         private int hovered = -1;
+        private int contentTab;
         private int closeFrame = -1;
         private Vector2 scroll;
         private CursorLockMode previousLock;
@@ -1787,6 +1943,7 @@ public class BeerGlassPour : MonoBehaviour
                     previousLock = Cursor.lockState;
                     previousCursorVisible = Cursor.visible;
                     selected = index;
+                    contentTab = 0;
                     scroll = Vector2.zero;
                     Cursor.lockState = CursorLockMode.None;
                     Cursor.visible = true;
@@ -1824,16 +1981,16 @@ public class BeerGlassPour : MonoBehaviour
         private void EnsureStyles()
         {
             if (bodyStyle != null) return;
-            bodyStyle = TextStyle(18, font, ink);
+            bodyStyle = TextStyle(22, font, ink);
             titleStyle = TextStyle(38, displayFont, ink);
-            sectionStyle = TextStyle(12, font, muted, FontStyle.Bold);
-            smallStyle = TextStyle(13, font, muted);
-            amountStyle = TextStyle(17, font, ink, FontStyle.Bold);
+            sectionStyle = TextStyle(15, font, muted, FontStyle.Bold);
+            smallStyle = TextStyle(16, font, muted);
+            amountStyle = TextStyle(22, font, accents[0], FontStyle.Bold);
             amountStyle.alignment = TextAnchor.UpperRight;
-            numberStyle = TextStyle(16, font, muted, FontStyle.Bold);
-            centeredStyle = TextStyle(13, font, muted);
+            numberStyle = TextStyle(19, font, muted, FontStyle.Bold);
+            centeredStyle = TextStyle(16, font, muted);
             centeredStyle.alignment = TextAnchor.MiddleCenter;
-            buttonStyle = TextStyle(14, font, ink, FontStyle.Bold);
+            buttonStyle = TextStyle(18, font, ink, FontStyle.Bold);
             buttonStyle.alignment = TextAnchor.MiddleCenter;
             buttonStyle.hover.textColor = new Color(0.25f, 0.5f, 0.36f);
             buttonStyle.active.textColor = buttonStyle.hover.textColor;
@@ -1866,8 +2023,17 @@ public class BeerGlassPour : MonoBehaviour
         private void SwitchTo(int index)
         {
             selected = (index + 3) % 3;
+            contentTab = 0;
             scroll = Vector2.zero;
             // Rebuild GUILayout before drawing a different number of recipe rows.
+            GUIUtility.ExitGUI();
+        }
+
+        private void SwitchContent(int tab)
+        {
+            if (contentTab == tab) return;
+            contentTab = tab;
+            scroll = Vector2.zero;
             GUIUtility.ExitGUI();
         }
 
@@ -1888,8 +2054,8 @@ public class BeerGlassPour : MonoBehaviour
                 Fill(new Rect(0f, 0f, width, height), cream);
                 Fill(new Rect(0f, 0f, width, 5f), accents[selected]);
                 GUI.Label(new Rect(36f, 24f, 300f, 22f), "THE  BAR  BOOK", sectionStyle);
-                GUI.Label(new Rect(36f, 55f, 290f, 24f), "COCKTAIL RECIPES / VOL. 01", smallStyle);
-                if (Button(new Rect(874f, 20f, 130f, 32f), "CLOSE  [ESC]")) { Close(); return; }
+                GUI.Label(new Rect(36f, 55f, 290f, 28f), "RECIPE 0" + (selected + 1) + " / 03", smallStyle);
+                if (Button(new Rect(844f, 20f, 160f, 36f), "CLOSE [ESC]")) { Close(); return; }
                 for (int index = 0; index < 3; index++)
                     if (Button(new Rect(384f + index * 208f, 66f, 200f, 34f), shortTitles[index], selected == index))
                         SwitchTo(index);
@@ -1899,44 +2065,47 @@ public class BeerGlassPour : MonoBehaviour
                 GUI.Label(new Rect(64f, 534f, 224f, 32f), methods[selected], centeredStyle);
                 GUI.Label(new Rect(36f, 577f, 280f, 24f), glasses[selected], centeredStyle);
                 GUI.Label(new Rect(384f, 119f, 620f, 53f), titles[selected], titleStyle);
-                GUI.Label(new Rect(384f, 180f, 620f, 25f), descriptions[selected], smallStyle);
+                GUI.Label(new Rect(384f, 180f, 620f, 28f), "Any ingredient order. Match quantities and technique.", smallStyle);
 
-                GUILayout.BeginArea(new Rect(384f, 223f, 620f, 362f));
-                scroll = GUILayout.BeginScrollView(scroll, false, true);
-                GUILayout.Label("INGREDIENTS", sectionStyle);
-                GUILayout.Space(9f);
-                for (int row = 0; row < ingredientNames[selected].Length; row++)
+                if (Button(new Rect(384f, 219f, 300f, 36f), "INGREDIENTS", contentTab == 0)) SwitchContent(0);
+                if (Button(new Rect(696f, 219f, 308f, 36f), "METHOD", contentTab == 1)) SwitchContent(1);
+                GUILayout.BeginArea(new Rect(384f, 271f, 620f, 321f));
+                scroll = GUILayout.BeginScrollView(scroll, false, false);
+                if (contentTab == 0)
                 {
-                    GUILayout.BeginHorizontal();
-                    GUILayout.Label(ingredientNames[selected][row], bodyStyle, GUILayout.MinHeight(25f));
-                    GUILayout.Label(amounts[selected][row], amountStyle, GUILayout.Width(120f));
-                    GUILayout.EndHorizontal();
-                    Fill(GUILayoutUtility.GetRect(1f, 1f, GUILayout.ExpandWidth(true)), new Color(0.78f, 0.78f, 0.7f, 0.5f));
-                    GUILayout.Space(6f);
+                    for (int row = 0; row < ingredientNames[selected].Length; row++)
+                    {
+                        GUILayout.BeginHorizontal();
+                        GUILayout.Label(ingredientNames[selected][row], bodyStyle, GUILayout.MinHeight(32f));
+                        GUILayout.Label(amounts[selected][row], amountStyle, GUILayout.Width(135f));
+                        GUILayout.EndHorizontal();
+                        Fill(GUILayoutUtility.GetRect(1f, 1f, GUILayout.ExpandWidth(true)), new Color(0.78f, 0.78f, 0.7f, 0.5f));
+                        GUILayout.Space(11f);
+                    }
                 }
-                GUILayout.Space(20f);
-                GUILayout.Label("METHOD", sectionStyle);
-                GUILayout.Space(12f);
-                for (int step = 0; step < steps[selected].Length; step++)
+                else
                 {
-                    GUILayout.BeginHorizontal();
-                    GUILayout.Label((step + 1).ToString("00"), numberStyle, GUILayout.Width(35f));
-                    GUILayout.Label(steps[selected][step], bodyStyle);
-                    GUILayout.EndHorizontal();
-                    GUILayout.Space(12f);
+                    for (int step = 0; step < steps[selected].Length; step++)
+                    {
+                        GUILayout.BeginHorizontal();
+                        GUILayout.Label((step + 1).ToString("00"), numberStyle, GUILayout.Width(38f));
+                        GUILayout.Label(steps[selected][step], bodyStyle, GUILayout.MinHeight(32f));
+                        GUILayout.EndHorizontal();
+                        GUILayout.Space(16f);
+                    }
                 }
                 GUILayout.EndScrollView();
                 GUILayout.EndArea();
 
                 Fill(new Rect(36f, 614f, 968f, 1f), new Color(0.78f, 0.78f, 0.7f));
-                if (Button(new Rect(36f, 630f, 280f, 32f), "Start to make", true))
+                if (Button(new Rect(36f, 622f, 280f, 42f), "Start to make", true))
                 {
                     owner.BeginPractice(selected);
                     GUIUtility.ExitGUI();
                 }
-                if (Button(new Rect(384f, 630f, 155f, 32f), "<  PREVIOUS")) SwitchTo(selected - 1);
-                GUI.Label(new Rect(630f, 630f, 130f, 32f), "0" + (selected + 1) + " / 03", centeredStyle);
-                if (Button(new Rect(849f, 630f, 155f, 32f), "NEXT  >")) SwitchTo(selected + 1);
+                if (Button(new Rect(384f, 622f, 155f, 42f), "<  PREVIOUS")) SwitchTo(selected - 1);
+                GUI.Label(new Rect(630f, 622f, 130f, 42f), "0" + (selected + 1) + " / 03", centeredStyle);
+                if (Button(new Rect(849f, 622f, 155f, 42f), "NEXT  >")) SwitchTo(selected + 1);
             }
             finally { GUI.matrix = previousMatrix; }
         }

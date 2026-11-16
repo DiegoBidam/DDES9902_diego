@@ -49,6 +49,9 @@ public class UniformInteraction : MonoBehaviour
     private string prompt = "";
     private string subtitle = "";
     private GUIStyle textStyle;
+    private GUIStyle completionStyle;
+    private string completionMessage = "";
+    private float completionUntil;
     private GameObject uniformSignRoot;
     private Transform shirtSign;
     private Transform apronSign;
@@ -122,6 +125,7 @@ public class UniformInteraction : MonoBehaviour
 
                 ShirtWorn = true;
                 shirt.SetActive(false);
+                ConfirmStep("T-SHIRT EQUIPPED");
                 prompt = "";
                 PlayGuide(afterShirtVoice, "Great. Now put on your apron.");
             }
@@ -143,6 +147,7 @@ public class UniformInteraction : MonoBehaviour
             {
                 ApronWorn = true;
                 apron.SetActive(false);
+                ConfirmStep("APRON EQUIPPED");
                 prompt = "";
 
                 PlayGuide(
@@ -216,6 +221,7 @@ public class UniformInteraction : MonoBehaviour
 
         showingShiftMessage = false;
         ShiftCompleted = true;
+        ConfirmStep("SHIFT STARTED");
 
         if (movement != null)
             movement.enabled = true;
@@ -384,6 +390,29 @@ public class UniformInteraction : MonoBehaviour
 #endif
     }
 
+    void ConfirmStep(string message)
+    {
+        completionMessage = message;
+        completionUntil = Time.unscaledTime + 2.5f;
+    }
+
+    void DrawStepConfirmation()
+    {
+        if (Time.unscaledTime >= completionUntil) return;
+        if (completionStyle == null)
+        {
+            completionStyle = new GUIStyle(GUI.skin.label) { fontSize = 24, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
+            completionStyle.normal.textColor = new Color(0.7f, 1f, 0.82f);
+        }
+        float width = Mathf.Min(580f, Screen.width - 32f);
+        Rect panel = new Rect((Screen.width - width) * 0.5f, 76f, width, 50f);
+        Color old = GUI.color;
+        GUI.color = new Color(0.025f, 0.15f, 0.11f, 0.96f);
+        GUI.DrawTexture(panel, Texture2D.whiteTexture);
+        GUI.color = old;
+        GUI.Label(panel, completionMessage, completionStyle);
+    }
+
     void OnGUI()
     {
         if (textStyle == null)
@@ -401,6 +430,7 @@ public class UniformInteraction : MonoBehaviour
 
         GUI.Box(new Rect(15, 15, 320, 45), "");
         GUI.Label(new Rect(15, 15, 320, 45), status, textStyle);
+        DrawStepConfirmation();
 
         if (showingShiftMessage)
         {
