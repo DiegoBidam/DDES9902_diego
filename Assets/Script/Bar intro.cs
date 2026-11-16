@@ -80,17 +80,25 @@ public class BarIntro : MonoBehaviour
 
     IEnumerator LoadBackgroundMusic()
     {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // 브라우저에서는 file:// 캐시에 접근할 수 없으므로 포함된 음원을 직접 전달합니다.
+        string audioUrl = string.Concat("data:audio/ogg;base64,", MusicOggBase64);
+#else
         string path = PrepareMusicCache();
         if (string.IsNullOrEmpty(path)) yield break;
-        // 로컬 캐시만 사용합니다. 실행 중 인터넷 다운로드나 Assets 생성은 없습니다.
+        string audioUrl = new System.Uri(path).AbsoluteUri;
+#endif
+        // 양쪽 모두 포함된 음원을 사용하며 외부 서버에서 다운로드하지 않습니다.
         using (var request = UnityEngine.Networking.UnityWebRequestMultimedia.GetAudioClip(
-            new System.Uri(path).AbsoluteUri, AudioType.OGGVORBIS))
+            audioUrl, AudioType.OGGVORBIS))
         {
             musicRequest = request;
             try
             {
                 request.timeout = 15;
+#if !UNITY_WEBGL || UNITY_EDITOR
                 ((UnityEngine.Networking.DownloadHandlerAudioClip)request.downloadHandler).streamAudio = true;
+#endif
                 yield return request.SendWebRequest();
                 if (request.result != UnityEngine.Networking.UnityWebRequest.Result.Success)
                 {
