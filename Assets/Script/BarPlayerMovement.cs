@@ -45,9 +45,13 @@ public class BarPlayerMovement : MonoBehaviour
 
     public void ResetViewPitch()
     {
-        pitch = 0f;
-        if (view != null)
-            view.localRotation = Quaternion.identity;
+        SetViewPitch(0f);
+    }
+
+    public void SetViewPitch(float angle)
+    {
+        pitch = Mathf.Clamp(angle, -80f, 80f);
+        if (view != null) view.localRotation = Quaternion.Euler(pitch, 0f, 0f);
     }
 
     void Update()
@@ -95,7 +99,7 @@ public class BarPlayerMovement : MonoBehaviour
 
         // 안내 중에는 이동/시점/클릭 입력을 버리되 기존 중력 처리는 유지합니다.
         if ((uniform != null && uniform.IsGuidePlaying)
-            || (beerInteraction != null && beerInteraction.IsRecipeOpen))
+            || (beerInteraction != null && (beerInteraction.IsRecipeOpen || beerInteraction.IsGuidePlaying)))
         {
             movement = Vector2.zero;
             look = Vector2.zero;
