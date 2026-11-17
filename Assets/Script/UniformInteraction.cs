@@ -62,6 +62,8 @@ public class UniformInteraction : MonoBehaviour
     private Material signBackground;
     private Material shirtSignAccent;
     private Material apronSignAccent;
+    private Renderer clockGuideRenderer;
+    private WaypointBeacon clockBeacon;
 
     void Start()
     {
@@ -84,6 +86,15 @@ public class UniformInteraction : MonoBehaviour
 
         HideClockGuide();
         CreateUniformSigns();
+        if (clockGuide != null)
+        {
+            clockGuideRenderer = clockGuide.GetComponent<Renderer>();
+            ClockGuidePulse pulse = clockGuide.GetComponent<ClockGuidePulse>();
+            if (pulse == null) pulse = clockGuide.AddComponent<ClockGuidePulse>();
+            pulse.floatHeight = 0.1f; pulse.floatSpeed = 2f; pulse.pulseSpeed = 2.4f;
+            pulse.enabled = true;
+            clockBeacon = new WaypointBeacon(gameObject, false, false);
+        }
     }
 
     void Update()
@@ -408,6 +419,13 @@ public class UniformInteraction : MonoBehaviour
 
     void LateUpdate()
     {
+        if (clockBeacon != null)
+        {
+            if (!shiftStarted && clockGuide != null && clockGuide.activeInHierarchy
+                && clockGuideRenderer != null && clockGuideRenderer.enabled)
+                clockBeacon.Show(clockGuide.transform.position, playerCamera, "CLOCK IN");
+            else clockBeacon.Hide();
+        }
         UpdateUniformSign(shirtSign, shirt, ShirtWorn, shirtSignHint,
             IsGuidePlaying ? "Listen to the guide..." : "Aim at shirt + press E");
         UpdateUniformSign(apronSign, apron, ApronWorn, apronSignHint,
@@ -426,8 +444,14 @@ public class UniformInteraction : MonoBehaviour
         FitSignText(hint, instruction, 0.82f, 0.065f);
     }
 
+    void OnDisable()
+    {
+        if (clockBeacon != null) clockBeacon.Hide();
+    }
+
     void OnDestroy()
     {
+        if (clockBeacon != null) clockBeacon.Dispose();
         if (stationTrialVoice != null)
         {
             if (clothingVoiceSource != null && clothingVoiceSource.clip == stationTrialVoice)
