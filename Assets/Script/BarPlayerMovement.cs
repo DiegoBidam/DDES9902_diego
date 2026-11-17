@@ -98,7 +98,8 @@ public class BarPlayerMovement : MonoBehaviour
 #endif
 
         // 시작 전에는 위치 이동만 막습니다. 마우스 시점/커서 입력은 그대로 처리합니다.
-        if (intro != null && intro.IsWaitingToStart) movement = Vector2.zero;
+        bool waitingToStart = intro != null && intro.IsWaitingToStart;
+        if (waitingToStart) movement = Vector2.zero;
 
         // 음성 안내 중에도 이동/시점을 허용합니다. 행위 입력은 각 상호작용 스크립트에서 막습니다.
         // 레시피 창을 열었을 때만 메뉴 조작을 위해 이동/시점 입력을 비웁니다.
@@ -122,7 +123,8 @@ public class BarPlayerMovement : MonoBehaviour
             look = Vector2.zero;
         }
 
-        if (Cursor.lockState == CursorLockMode.Locked)
+        // 최초 화면은 브라우저가 포인터 잠금을 허용하기 전에도 마우스로 둘러볼 수 있습니다.
+        if (Cursor.lockState == CursorLockMode.Locked || (waitingToStart && Application.isFocused))
         {
             transform.Rotate(0f, look.x, 0f);
             pitch = Mathf.Clamp(pitch - look.y, -80f, 80f);
