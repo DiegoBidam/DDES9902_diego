@@ -1426,8 +1426,8 @@ public class BeerGlassPour : MonoBehaviour
         private readonly bool[] included = new bool[10];
         private bool shakerIced, glassIced, stirred, shaken, transferred;
         private string noticeTitle = "", noticeDetail = "";
-        private float noticeUntil;
-        private bool noticeSuccess;
+        private float noticeUntil, noticeStarted;
+        private bool noticeSuccess, noticeCelebrate;
         private string pendingPourTitle = "", pendingPourDetail = "";
         private readonly float[] glassHeights = { 0.16f, 0.20f, 0.32f };
         private readonly Color ink = new Color(0.89f, 0.94f, 0.92f);
@@ -1467,6 +1467,7 @@ public class BeerGlassPour : MonoBehaviour
         private Vector3 stirStart, shakerStart;
         private GUIStyle bodyStyle, titleStyle, smallStyle, labelStyle, buttonStyle, timerStyle;
         private GUIStyle ingredientNameStyle, statusStyle, countStyle, noticeTitleStyle, instructionStyle, timerCaptionStyle;
+        private GUIStyle feedbackTitleStyle, feedbackDetailStyle;
         public bool IsActive { get; private set; }
 
         public CocktailPractice(BeerGlassPour owner, int recipe)
@@ -1750,7 +1751,8 @@ public class BeerGlassPour : MonoBehaviour
             System.Array.Clear(ingredientTotals, 0, ingredientTotals.Length);
             System.Array.Clear(included, 0, included.Length);
             shakerIced = false; glassIced = false; stirred = false; shaken = false; transferred = false;
-            noticeUntil = 0f; pendingPourTitle = ""; pendingPourDetail = "";
+            noticeUntil = 0f; noticeStarted = 0f; noticeCelebrate = false;
+            pendingPourTitle = ""; pendingPourDetail = "";
             strokes = 0; travel = 0f; travelDirection = 0; lastStrokeDirection = 0;
             failed = false; completed = false; error = ""; remaining = RoundSeconds;
             awaitingStart = true; roundRecorded = false;
@@ -1852,7 +1854,7 @@ public class BeerGlassPour : MonoBehaviour
                 bool intoShaker = recipe == 2 && !shakerIced;
                 if (intoShaker) { AddIce(shaker); shakerIced = true; }
                 else { AddIce(glassObjects[selectedGlass]); glassIced = true; }
-                Notify("ICE ADDED", intoShaker ? "Ice is in the shaker." : "Ice is in your serving glass.");
+                Notify("ICE ADDED", intoShaker ? "Ice is in the shaker." : "Ice is in your serving glass.", celebrate: true);
             }
             else
             {
@@ -1924,7 +1926,7 @@ public class BeerGlassPour : MonoBehaviour
             }
             if (apply && pourObject == shaker) { fills[3].SetActive(false); levels[3] = 0f; }
             pouring = false; pourObject = null; pourTarget = null;
-            if (apply) Notify(pendingPourTitle, pendingPourDetail);
+            if (apply) Notify(pendingPourTitle, pendingPourDetail, celebrate: true);
             pendingPourTitle = ""; pendingPourDetail = "";
         }
 
@@ -1936,7 +1938,7 @@ public class BeerGlassPour : MonoBehaviour
                 if (phase != Phase.ChooseGlass) return;
                 if (code != recipe) { Fail("Incorrect glass.\nChoose the " + glassNames[recipe] + " for " + recipeNames[recipe] + "."); return; }
                 selectedGlass = code; rings[code].SetActive(trial < 2); phase = Phase.Build;
-                Notify("GLASS SELECTED", glassNames[code] + " is ready. Add your ingredients."); return;
+                Notify("CORRECT GLASS", glassNames[code] + " selected. Add your ingredients.", celebrate: true); return;
             }
             if (code == 32 || code == 33) { SetMeasure(code == 32 ? 1f : 0.5f); return; }
             if (phase == Phase.Transfer && code == 31)
@@ -1984,7 +1986,7 @@ public class BeerGlassPour : MonoBehaviour
                 ReturnTool();
                 if (wasStirring) stirred = true; else shaken = true;
                 RefreshPhase();
-                Notify(wasStirring ? "STIRRING COMPLETE" : "SHAKING COMPLETE", "15 / 15 round trips. " + NextInstruction(), 3f);
+                Notify(wasStirring ? "STIRRING COMPLETE" : "SHAKING COMPLETE", "15 / 15 round trips. " + NextInstruction(), 3f, celebrate: true);
             }
         }
 
@@ -2155,10 +2157,12 @@ public class BeerGlassPour : MonoBehaviour
         }
         private Rect TimerOnlyRect() { return new Rect(Screen.width - 170f, 16f, 154f, 54f); }
 
-        private void Notify(string title, string detail, float duration = 2.4f, bool success = true)
+        private void Notify(string title, string detail, float duration = 2.4f, bool success = true, bool celebrate = false)
         {
             if (trial == 2) return;
-            noticeTitle = title; noticeDetail = trial == 0 ? detail : "Action complete."; noticeUntil = Time.unscaledTime + duration; noticeSuccess = success;
+            noticeTitle = title; noticeDetail = trial == 0 ? detail : "Action complete.";
+            noticeStarted = Time.unscaledTime; noticeUntil = noticeStarted + duration;
+            noticeSuccess = success; noticeCelebrate = celebrate && success;
         }
         private bool ShowTargetLabel(int code)
         {
@@ -2220,6 +2224,9 @@ public class BeerGlassPour : MonoBehaviour
             countStyle = new GUIStyle(titleStyle) { fontSize = 23, alignment = TextAnchor.MiddleRight };
             noticeTitleStyle = new GUIStyle(titleStyle) { fontSize = 23 };
             noticeTitleStyle.normal.textColor = new Color(0.76f, 1f, 0.85f);
+            feedbackTitleStyle = new GUIStyle(bodyStyle) { fontSize = 32, fontStyle = FontStyle.Bold };
+            feedbackTitleStyle.normal.textColor = new Color(0.8f, 1f, 0.88f);
+            feedbackDetailStyle = new GUIStyle(bodyStyle) { fontSize = 20 };
         }
         private static void Fill(Rect rect, Color color)
         {
@@ -2249,6 +2256,7 @@ public class BeerGlassPour : MonoBehaviour
         private void DrawNotice()
         {
             if (Time.unscaledTime >= noticeUntil) return;
+            if (noticeCelebrate) { DrawPositiveFeedback(); return; }
             float width = Mathf.Min(640f, Screen.width - 32f);
             Rect rect = new Rect((Screen.width - width) * 0.5f, Screen.height - 220f, width, 84f);
             Fill(rect, noticeSuccess ? new Color(0.035f, 0.18f, 0.13f, 0.98f) : new Color(0.22f, 0.17f, 0.08f, 0.98f));
@@ -2256,6 +2264,48 @@ public class BeerGlassPour : MonoBehaviour
             GUI.Label(new Rect(rect.x + 18f, rect.y + 5f, width - 36f, 32f), noticeTitle, noticeTitleStyle);
             GUI.Label(new Rect(rect.x + 18f, rect.y + 39f, width - 36f, 40f), noticeDetail, smallStyle);
         }
+        private void DrawPositiveFeedback()
+        {
+            float age = Mathf.Max(0f, Time.unscaledTime - noticeStarted);
+            float enter = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(age / 0.18f));
+            float alpha = Mathf.Min(Mathf.Clamp01(age / 0.08f), Mathf.Clamp01((noticeUntil - Time.unscaledTime) / 0.25f));
+            float width = Mathf.Min(760f, Screen.width - 32f);
+            float textWidth = width - 108f;
+            string heading = "GOOD JOB! " + noticeTitle;
+            float titleHeight = Mathf.Max(36f, feedbackTitleStyle.CalcHeight(new GUIContent(heading), textWidth));
+            float detailHeight = Mathf.Max(26f, feedbackDetailStyle.CalcHeight(new GUIContent(noticeDetail), textWidth));
+            float height = Mathf.Max(108f, titleHeight + detailHeight + 36f);
+            Rect panel = new Rect((Screen.width - width) * 0.5f,
+                Screen.height - 136f - height + (1f - enter) * 12f, width, height);
+            Matrix4x4 savedMatrix = GUI.matrix;
+            Color savedColor = GUI.color;
+            try
+            {
+                // UI만 작게 나타나게 합니다. 카메라/입력/타이머는 변경하지 않습니다.
+                float scale = 0.96f + 0.04f * enter;
+                GUIUtility.ScaleAroundPivot(new Vector2(scale, scale), panel.center);
+                GUI.color = new Color(savedColor.r, savedColor.g, savedColor.b, savedColor.a * alpha);
+                Fill(panel, new Color(0.025f, 0.19f, 0.12f, 0.98f * alpha));
+                Fill(new Rect(panel.x, panel.y, 6f, panel.height), new Color(0.4f, 1f, 0.65f, alpha));
+                Rect badge = new Rect(panel.x + 18f, panel.center.y - 27f, 54f, 54f);
+                Fill(badge, new Color(0.14f, 0.62f, 0.35f, alpha));
+                DrawFeedbackStroke(new Vector2(badge.x + 11f, badge.y + 28f), new Vector2(badge.x + 23f, badge.y + 40f), alpha);
+                DrawFeedbackStroke(new Vector2(badge.x + 23f, badge.y + 40f), new Vector2(badge.x + 44f, badge.y + 15f), alpha);
+                GUI.Label(new Rect(panel.x + 88f, panel.y + 12f, textWidth, titleHeight), heading, feedbackTitleStyle);
+                GUI.Label(new Rect(panel.x + 88f, panel.y + 20f + titleHeight, textWidth, detailHeight), noticeDetail, feedbackDetailStyle);
+            }
+            finally { GUI.matrix = savedMatrix; GUI.color = savedColor; }
+        }
+
+        private static void DrawFeedbackStroke(Vector2 start, Vector2 end, float alpha)
+        {
+            Matrix4x4 saved = GUI.matrix;
+            Vector2 delta = end - start;
+            GUIUtility.RotateAroundPivot(Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg, start);
+            Fill(new Rect(start.x, start.y - 2f, delta.magnitude, 4f), new Color(0.94f, 1f, 0.96f, alpha));
+            GUI.matrix = saved;
+        }
+
         private void Exit()
         {
             if (!IsActive) return;
