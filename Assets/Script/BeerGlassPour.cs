@@ -1405,7 +1405,7 @@ public class BeerGlassPour : MonoBehaviour
     {
         private enum Phase { ChooseGlass, Build, Stir, Shake, GlassIce, Transfer, TopUp, Ready }
         private const int Layer = 30;
-        private const float RoundSeconds = 45f;
+        private float RoundSeconds => trial == 0 ? 90f : trial == 1 ? 60f : 45f;
         private const float TableY = 0.98f;
         private readonly BeerGlassPour owner;
         private readonly int recipe;
@@ -1823,7 +1823,7 @@ public class BeerGlassPour : MonoBehaviour
             if (failed || completed) return;
             noticeUntil = 0f;
             error = trial == 0 ? message : message.StartsWith("Time's up")
-                ? "Time's up! The 45-second limit has expired."
+                ? "Time's up! The " + RoundSeconds.ToString("0") + "-second limit has expired."
                 : "The glass, ingredients, amounts or technique are not correct. Please try again.";
             failed = true; StopPour(false); ReturnTool();
             if (owner.sounds != null) owner.sounds.PlayResult(false);
@@ -2058,7 +2058,7 @@ public class BeerGlassPour : MonoBehaviour
                 return;
             }
             remaining = Mathf.Max(0f, remaining - Time.unscaledDeltaTime);
-            if (remaining <= 0f) { Fail("Time's up!\nThe 45-second limit has expired."); return; }
+            if (remaining <= 0f) { Fail("Time's up!\nThe " + RoundSeconds.ToString("0") + "-second limit has expired."); return; }
             if (FinishRequested()) { TryFinish(); return; }
             if (!pouring && !toolHeld && MeasureSwitchRequested()) SetMeasure(measure == 1f ? 0.5f : 1f);
             if (pouring) { TickPour(); return; }
@@ -2289,12 +2289,12 @@ public class BeerGlassPour : MonoBehaviour
             owner.DrawTrialChecks(new Rect(panel.x + 28f, panel.y + 112f, width - 56f, 34f), recipe, smallStyle);
             GUI.Label(new Rect(panel.x + 28f, panel.y + 162f, width - 56f, 64f), trialDescriptions[trial], bodyStyle);
             GUI.Label(new Rect(panel.x + 28f, panel.y + 240f, width - 56f, 110f),
-                "Click objects to use them. Flip the jigger with R or click its cups.\nHold LEFT CLICK to stir or shake. Press ENTER to submit.\nESC returns to the bar. Your 45 seconds start after BEGIN.", smallStyle);
+                "Click objects to use them. Flip the jigger with R or click its cups.\nHold LEFT CLICK to stir or shake. Press ENTER to submit.\nESC returns to the bar. Your " + RoundSeconds.ToString("0") + " seconds start after BEGIN.", smallStyle);
             float buttonWidth = (width - 72f) * 0.5f;
             if (ActionButton(new Rect(panel.x + 28f, panel.yMax - 76f, buttonWidth, 48f), "BEGIN TRIAL " + (trial + 1), true))
             {
                 awaitingStart = false;
-                Notify("TRIAL STARTED", "45 seconds. Choose the " + glassNames[recipe] + ".");
+                Notify("TRIAL STARTED", RoundSeconds.ToString("0") + " seconds. Choose the " + glassNames[recipe] + ".");
             }
             if (ActionButton(new Rect(panel.center.x + 8f, panel.yMax - 76f, buttonWidth, 48f), "Back to the bar")) Exit();
         }
@@ -2326,7 +2326,7 @@ public class BeerGlassPour : MonoBehaviour
                     + (owner.passedTrials[recipe] < 3 ? "Continue with less guidance in the next trial." : "All trials for this recipe are complete."), bodyStyle);
                 owner.DrawTrialChecks(new Rect(panel.x + 28f, panel.y + 214f, width - 56f, 34f), recipe, smallStyle);
                 GUI.Label(new Rect(panel.x + 28f, panel.y + 268f, width - 56f, 52f), failed
-                    ? "This trial was not checked. Retry with a fresh 45 seconds."
+                    ? "This trial was not checked. Retry with a fresh " + RoundSeconds.ToString("0") + " seconds."
                     : owner.passedTrials[recipe] >= 3 ? "Return to the table and choose another recipe." : "The next trial starts with a short control reminder.", smallStyle);
             }
             float buttonWidth = (width - 72f) * 0.5f;
@@ -2394,7 +2394,7 @@ public class BeerGlassPour : MonoBehaviour
             GUI.Label(new Rect(32f, 74f, Screen.width - 326f, 44f), pouring ? "Pouring into the vessel..." : NextInstruction(), instructionStyle);
             Color old = GUI.color; GUI.color = remaining <= 10f ? new Color(1f, 0.44f, 0.32f) : ink;
             GUI.Label(new Rect(Screen.width - 270f, 29f, 150f, 43f), remaining.ToString("0.0") + " s", timerStyle); GUI.color = old;
-            GUI.Label(new Rect(Screen.width - 270f, 77f, 150f, 24f), "SECONDS LEFT / 45", timerCaptionStyle);
+            GUI.Label(new Rect(Screen.width - 270f, 77f, 150f, 24f), "SECONDS LEFT / " + RoundSeconds.ToString("0"), timerCaptionStyle);
             Fill(new Rect(32f, 124f, (Screen.width - 64f) * remaining / RoundSeconds, 3f), remaining <= 10f ? new Color(1f, 0.44f, 0.32f) : new Color(0.4f, 0.8f, 0.6f));
             if (ActionButton(new Rect(Screen.width - 112f, 28f, 80f, 32f), "EXIT")) { Exit(); return; }
             foreach (int code in targets.Keys)
