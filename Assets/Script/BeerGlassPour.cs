@@ -39,7 +39,7 @@ public class BeerGlassPour : MonoBehaviour
     private int pendingBeerInstruction = -1;
     private int guideInputFrame = -1;
     public bool IsGuidePlaying => guideBusy || guideInputFrame == Time.frameCount;
-    private int ExpectedBeerGlass => served[0] ? 1 : 0;
+    private int ExpectedBeerGlass => barOpened && night != null ? night.ExpectedBeerIndex : served[0] ? 1 : 0;
     private Transform holdPoint;
     private GameObject heldGlass;
 
@@ -61,8 +61,10 @@ public class BeerGlassPour : MonoBehaviour
     private int practiceReturnFrame = -1;
     private readonly int[] passedTrials = new int[3];
     private bool barOpened;
+    private NightService night;
+    private readonly GlassHome[] glassHomes = new GlassHome[2];
     private bool AllTrialsComplete => passedTrials[0] >= 3 && passedTrials[1] >= 3 && passedTrials[2] >= 3;
-    public bool IsRecipeOpen => practiceReturnFrame == Time.frameCount || (recipeCards != null && recipeCards.BlocksInput);
+    public bool IsRecipeOpen => practiceReturnFrame == Time.frameCount || (recipeCards != null && recipeCards.BlocksInput) || (night != null && night.IsDialogOpen);
     private readonly LineRenderer[] serviceRings = new LineRenderer[2];
     private Material markerMaterial;
     private Material completedMaterial;
@@ -105,6 +107,8 @@ public class BeerGlassPour : MonoBehaviour
         PreparePourVisual(schoonerPourVisual);
         PreparePourVisual(pintPourVisual);
 
+        glassHomes[0] = new GlassHome(schoonerGlass);
+        glassHomes[1] = new GlassHome(pintGlass);
         CreateBeerStream();
         CreateServiceMarker();
         cocktailEquipment = new CocktailEquipment(this);
@@ -123,6 +127,7 @@ public class BeerGlassPour : MonoBehaviour
             return;
         }
         prompt = "";
+        if (barOpened && night != null) { night.Tick(); return; }
 
         if (IsRecipeOpen)
         {
@@ -218,7 +223,8 @@ public class BeerGlassPour : MonoBehaviour
     void LateUpdate()
     {
         if (stationBeacon == null) return;
-        if (uniform == null || !uniform.ShiftStarted || barOpened
+        if (uniform == null || !uniform.ShiftStarted
+            || (barOpened && (night == null || (!night.HasBeerOrder && !night.HasCocktailOrder)))
             || (practice != null && practice.IsActive) || IsRecipeOpen)
         {
             stationBeacon.Hide();
@@ -227,7 +233,16 @@ public class BeerGlassPour : MonoBehaviour
         CharacterController controller = GetComponent<CharacterController>();
         float radius = controller != null ? controller.radius * Mathf.Max(Mathf.Abs(transform.lossyScale.x), Mathf.Abs(transform.lossyScale.z)) : 0.3f;
         float floorY = guideFloor != null ? guideFloor.transform.TransformPoint(guideFloor.center + Vector3.up * guideFloor.size.y * 0.5f).y : 0.05f;
-        if (!beerIntroStarted && beerNozzle != null)
+        if (night != null && night.HasBeerOrder && heldGlass != null && filled[HeldGlassIndex()] && serviceMarker != null)
+        {
+            Vector3 approach = serviceMarker.transform.position;
+            if (serviceDesk != null) approach.z = transform.position.z <= serviceDesk.bounds.center.z
+                ? serviceDesk.bounds.min.z - radius - 0.15f : serviceDesk.bounds.max.z + radius + 0.15f;
+            stationBeacon.Show(serviceMarker.transform.position + Vector3.up * 0.65f, playerCamera, "SERVE ORDER");
+            stationBeacon.SetTrail(transform.position, approach, floorY);
+            return;
+        }
+        if ((!beerIntroStarted || (night != null && night.HasBeerOrder)) && beerNozzle != null)
         {
             Vector3 approach = beerNozzle.position;
             if (serviceDesk != null)
@@ -241,7 +256,7 @@ public class BeerGlassPour : MonoBehaviour
             stationBeacon.SetTrail(transform.position, approach, floorY);
             return;
         }
-        if (!TaskCompleted || recipeCards == null || !recipeCards.TryGetFocusPoint(out Vector3 focus))
+        if ((!TaskCompleted && !(night != null && night.HasCocktailOrder)) || recipeCards == null || !recipeCards.TryGetFocusPoint(out Vector3 focus))
         {
             stationBeacon.Hide();
             return;
@@ -364,7 +379,7 @@ public class BeerGlassPour : MonoBehaviour
 
         Transform target = hit.collider.transform;
 
-        if (!served[0] && schoonerGlass != null && target.IsChildOf(schoonerGlass.transform))
+        if ((barOpened || !served[0]) && schoonerGlass != null && target.IsChildOf(schoonerGlass.transform))
         {
             prompt = "Left Click - Pick up schooner";
 
@@ -374,7 +389,7 @@ public class BeerGlassPour : MonoBehaviour
             return;
         }
 
-        if (!served[1] && pintGlass != null && target.IsChildOf(pintGlass.transform))
+        if ((barOpened || !served[1]) && pintGlass != null && target.IsChildOf(pintGlass.transform))
         {
             prompt = "Left Click - Pick up pint";
 
@@ -387,12 +402,12 @@ public class BeerGlassPour : MonoBehaviour
 
     void PickUpGlass(GameObject glass)
     {
-        if (IsGuidePlaying || TaskCompleted) return;
+        if (IsGuidePlaying || (!barOpened && TaskCompleted)) return;
         int index = glass == schoonerGlass ? 0 : 1;
         if (index != ExpectedBeerGlass)
         {
             ShowAction("WRONG GLASS", "Choose the " + (ExpectedBeerGlass == 0 ? "schooner" : "pint") + " glass.");
-            QueueBeerGuide(1);
+            if (!barOpened) QueueBeerGuide(1);
             return;
         }
         heldGlass = glass;
@@ -627,7 +642,7 @@ public class BeerGlassPour : MonoBehaviour
 
     void ServeGlass(int index)
     {
-        if (!filled[index] || served[index] || pouring || heldGlass == null || IsGuidePlaying || index != ExpectedBeerGlass)
+        if (!filled[index] || (!barOpened && served[index]) || pouring || heldGlass == null || IsGuidePlaying || index != ExpectedBeerGlass)
             return;
 
         // 원래 잔의 자식 메시 오프셋을 고려하여 잔 바닥이 표식 위에 오도록 정렬합니다.
@@ -647,11 +662,12 @@ public class BeerGlassPour : MonoBehaviour
         }
 
         // 서빙된 잔은 다시 집거나 중복 제출할 수 없습니다.
-        served[index] = true;
+        if (!barOpened) served[index] = true;
         if (sounds != null) sounds.PlayResult(true);
         serviceRings[index].sharedMaterial = completedMaterial;
         heldGlass = null;
         heldColliders = null;
+        if (barOpened && night != null) { night.CompleteBeer(); return; }
         prompt = TaskCompleted ? "Order complete! Both beers served." : "Beer served! Prepare the other glass.";
         ShowAction(TaskCompleted ? "BEER TASK COMPLETE" : "BEER SERVED - 1 / 2",
             TaskCompleted ? "Both glasses served. Walk around the bar to the rear cocktail table." : "Schooner served. Listen to the pint instruction.", 3f);
@@ -761,6 +777,7 @@ public class BeerGlassPour : MonoBehaviour
     void OnDisable()
     {
         if (stationBeacon != null) stationBeacon.Hide();
+        if (night != null) night.Suspend();
         CancelBeerGuide();
         if (sounds != null) sounds.StopAll();
     }
@@ -780,6 +797,7 @@ public class BeerGlassPour : MonoBehaviour
         if (stationBeacon != null) stationBeacon.Dispose();
         CancelBeerGuide();
         if (beerGuidance != null) beerGuidance.Dispose();
+        if (night != null) night.Dispose();
         if (practice != null) practice.Dispose();
         if (sounds != null) sounds.Dispose();
         if (recipeCards != null) recipeCards.Dispose();
@@ -834,6 +852,14 @@ public class BeerGlassPour : MonoBehaviour
         }
         if (uniform == null || !uniform.ShiftCompleted)
             return;
+
+        if (barOpened && night != null)
+        {
+            night.Draw();
+            InteractionPromptUI.Draw(prompt);
+            DrawActionFeedback();
+            return;
+        }
 
         if (recipeCards != null && recipeCards.IsOpen)
         {
@@ -952,11 +978,18 @@ public class BeerGlassPour : MonoBehaviour
 
     void OpenBar()
     {
-        if (!AllTrialsComplete) return;
+        if (!AllTrialsComplete || barOpened) return;
         if (practice != null && practice.IsActive) practice.Dispose();
         if (recipeCards != null) recipeCards.Close();
+        if (serviceDesk == null || serviceMarker == null)
+        {
+            ShowAction("CANNOT OPEN", "The bar counter / serving marker is missing.", 4f);
+            return;
+        }
         barOpened = true;
-        ShowAction("BAR OPEN", "All nine trials passed. Training is complete.", 4f);
+        if (recipeCards != null) recipeCards.SetAvailable(false);
+        night = new NightService(this);
+        ShowAction("BAR OPEN / NIGHT SERVICE", "Customers will arrive shortly. Blue: ASK ID. Red: REJECT.", 4f);
     }
 
     void DrawTrialChecks(Rect area, int recipe, GUIStyle labelStyle)
@@ -991,7 +1024,7 @@ public class BeerGlassPour : MonoBehaviour
 
     void BeginPractice(int recipe)
     {
-        if (!cocktailBriefingCompleted || IsGuidePlaying) return;
+        if (barOpened || !cocktailBriefingCompleted || IsGuidePlaying) return;
         recipeCards.Close();
         if (practice != null) practice.Dispose();
         practice = new CocktailPractice(this, recipe);
@@ -1492,11 +1525,469 @@ public class BeerGlassPour : MonoBehaviour
         };
     }
 
+    // 영업 상태는 기존 훈련과 분리합니다. 씬/프리팹 참조 없이 기존 카운터를 사용합니다.
+    private sealed class NightService
+    {
+        private enum GuestKind { Regular, CheckID, Intoxicated }
+        private enum State { Waiting, Arriving, Screening, Preparing, Receiving, Leaving }
+        private readonly BeerGlassPour owner;
+        private readonly GameObject root;
+        private GameObject guest, orb, receivedDrink;
+        private Transform leftArm, rightArm, leftLeg, rightLeg;
+        private TextMesh guestCaption;
+        private State state;
+        private GuestKind kind;
+        private int order = -1, guestNumber, servedCount, refusedCount, missedCount, encounterIndex;
+        private readonly int[] encounters = { 0, 1, 2, 3, 4 }; // 두 맥주/칵테일/ID/취객을 매 묶음에 모두 포함합니다.
+        private readonly string[] orderNames = { "Schooner beer", "Pint beer", "Gin & Tonic", "Negroni", "Long Island Iced Tea" };
+        private float deadline;
+        private Vector3 entrance, aisle, counter, drinkStart;
+        private bool atAisle, dialogOpen, idChecked, disposed;
+        private CursorLockMode dialogLock;
+        private bool dialogCursor;
+        private readonly System.Collections.Generic.List<Material> materials = new System.Collections.Generic.List<Material>();
+        private readonly System.Collections.Generic.List<Light> dimmedLights = new System.Collections.Generic.List<Light>();
+        private readonly System.Collections.Generic.List<float> lightIntensities = new System.Collections.Generic.List<float>();
+        private readonly System.Collections.Generic.List<Color> lightColors = new System.Collections.Generic.List<Color>();
+        private Material skin, dark, shirt, blue, red, paper, drinkMaterial;
+        private readonly UnityEngine.Rendering.AmbientMode savedAmbientMode;
+        private readonly Color savedAmbient, savedFogColor, savedBackground;
+        private readonly float savedAmbientIntensity, savedReflection, savedFogDensity;
+        private readonly bool savedFog;
+        private readonly FogMode savedFogMode;
+        private readonly CameraClearFlags savedClearFlags;
+        private GUIStyle titleStyle, bodyStyle, smallStyle, buttonStyle;
+        public bool IsDialogOpen => dialogOpen;
+        public bool HasBeerOrder => state == State.Preparing && order >= 0 && order < 2;
+        public bool HasCocktailOrder => state == State.Preparing && order >= 2;
+        public int ExpectedBeerIndex => HasBeerOrder ? order : -1;
+
+        public NightService(BeerGlassPour owner)
+        {
+            this.owner = owner;
+            savedAmbientMode = RenderSettings.ambientMode; savedAmbient = RenderSettings.ambientLight;
+            savedAmbientIntensity = RenderSettings.ambientIntensity; savedReflection = RenderSettings.reflectionIntensity;
+            savedFog = RenderSettings.fog; savedFogMode = RenderSettings.fogMode;
+            savedFogColor = RenderSettings.fogColor; savedFogDensity = RenderSettings.fogDensity;
+            savedBackground = owner.playerCamera.backgroundColor; savedClearFlags = owner.playerCamera.clearFlags;
+            root = new GameObject("NightService_Runtime");
+            UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(root, owner.gameObject.scene);
+            Bounds bar = owner.serviceDesk.bounds;
+            Bounds floor = owner.guideFloor != null ? owner.guideFloor.bounds : new Bounds(bar.center, new Vector3(12f, 0.1f, 10f));
+            float ground = floor.max.y;
+            counter = new Vector3(owner.serviceMarker.transform.position.x, ground, bar.min.z - 0.52f);
+            entrance = new Vector3(floor.center.x, ground, floor.min.z + 0.9f);
+            aisle = new Vector3(counter.x, ground, Mathf.Lerp(entrance.z, counter.z, 0.6f));
+            skin = MakeMaterial(new Color(0.75f, 0.51f, 0.34f)); dark = MakeMaterial(new Color(0.07f, 0.09f, 0.13f));
+            shirt = MakeMaterial(new Color(0.25f, 0.62f, 0.53f));
+            blue = MakeMaterial(new Color(0.16f, 0.53f, 1f), true); red = MakeMaterial(new Color(1f, 0.16f, 0.14f), true);
+            paper = MakeMaterial(new Color(0.87f, 0.94f, 0.91f), true);
+            drinkMaterial = MakeMaterial(new Color(1f, 0.65f, 0.13f), true);
+            SetNight(); ShuffleEncounters();
+            owner.ResetServiceGlasses();
+            if (owner.serviceMarker != null) owner.serviceMarker.SetActive(false);
+            state = State.Waiting; deadline = Time.unscaledTime + 5f;
+        }
+
+        private Material MakeMaterial(Color color, bool unlit = false)
+        {
+            Shader shader = Shader.Find(unlit ? "Universal Render Pipeline/Unlit" : "Universal Render Pipeline/Lit");
+            if (shader == null) shader = Shader.Find(unlit ? "Unlit/Color" : "Standard");
+            Material material = new Material(shader) { color = color }; materials.Add(material); return material;
+        }
+        private GameObject Part(string name, PrimitiveType type, Transform parent, Vector3 position, Vector3 scale, Material material)
+        {
+            GameObject obj = GameObject.CreatePrimitive(type); obj.name = name;
+            obj.transform.SetParent(parent, false); obj.transform.localPosition = position; obj.transform.localScale = scale;
+            obj.GetComponent<Renderer>().sharedMaterial = material;
+            Collider collider = obj.GetComponent<Collider>(); collider.enabled = false; UnityEngine.Object.Destroy(collider);
+            return obj;
+        }
+        private void Lamp(Vector3 position, Color color, float intensity)
+        {
+            GameObject obj = new GameObject("NightBarLight"); obj.transform.SetParent(root.transform, false); obj.transform.position = position;
+            Light light = obj.AddComponent<Light>(); light.type = LightType.Point; light.range = 7f;
+            light.intensity = intensity; light.color = color; light.shadows = LightShadows.None;
+        }
+        private void SetNight()
+        {
+            owner.playerCamera.clearFlags = CameraClearFlags.SolidColor;
+            owner.playerCamera.backgroundColor = new Color(0.012f, 0.022f, 0.065f);
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+            RenderSettings.ambientLight = new Color(0.3f, 0.36f, 0.52f); RenderSettings.ambientIntensity = 0.7f;
+            RenderSettings.reflectionIntensity = 0.35f;
+            RenderSettings.fog = true; RenderSettings.fogMode = FogMode.ExponentialSquared;
+            RenderSettings.fogColor = new Color(0.025f, 0.035f, 0.09f); RenderSettings.fogDensity = 0.018f;
+            foreach (GameObject sceneRoot in owner.gameObject.scene.GetRootGameObjects())
+                foreach (Light light in sceneRoot.GetComponentsInChildren<Light>())
+                    if (light.type == LightType.Directional)
+                    {
+                        dimmedLights.Add(light); lightIntensities.Add(light.intensity); lightColors.Add(light.color);
+                        light.intensity = 0.22f; light.color = new Color(0.48f, 0.61f, 1f);
+                    }
+            Lamp(owner.serviceDesk.bounds.center + Vector3.up * 2f, new Color(1f, 0.72f, 0.42f), 3f);
+            Lamp(entrance + Vector3.up * 2.5f, new Color(0.35f, 0.55f, 1f), 2f);
+            if (owner.cocktailEquipment != null && owner.cocktailEquipment.Table != null)
+                Lamp(owner.cocktailEquipment.Table.bounds.center + Vector3.up * 1.8f, new Color(1f, 0.78f, 0.53f), 3f);
+            GameObject sign = new GameObject("OpenSign"); sign.transform.SetParent(root.transform, false);
+            sign.transform.position = new Vector3(owner.serviceDesk.bounds.min.x + 0.9f, owner.serviceDesk.bounds.max.y + 0.7f, owner.serviceDesk.bounds.center.z);
+            TextMesh text = sign.AddComponent<TextMesh>(); text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            text.fontSize = 64; text.characterSize = 0.08f; text.anchor = TextAnchor.MiddleCenter;
+            text.text = "OPEN\nNIGHT SERVICE"; text.color = new Color(0.5f, 1f, 0.73f);
+            text.GetComponent<Renderer>().sharedMaterial = text.font.material;
+            sign.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
+        }
+        private void ShuffleEncounters()
+        {
+            for (int i = encounters.Length - 1; i > 0; i--)
+            { int j = Random.Range(0, i + 1); int swap = encounters[i]; encounters[i] = encounters[j]; encounters[j] = swap; }
+            encounterIndex = 0;
+        }
+        private void SpawnGuest()
+        {
+            if (encounterIndex >= encounters.Length) ShuffleEncounters();
+            int encounter = encounters[encounterIndex++];
+            kind = encounter == 3 ? GuestKind.CheckID : encounter == 4 ? GuestKind.Intoxicated : GuestKind.Regular;
+            order = kind != GuestKind.Regular ? -1 : encounter == 2 ? Random.Range(2, 5) : encounter;
+            guestNumber++; idChecked = false; atAisle = false;
+            guest = new GameObject("Customer_" + guestNumber); guest.transform.SetParent(root.transform, false); guest.transform.position = entrance;
+            shirt.color = Color.HSVToRGB(Random.value, 0.45f, 0.75f);
+            Part("Body", PrimitiveType.Capsule, guest.transform, Vector3.up * 1.03f, new Vector3(0.49f, 0.39f, 0.29f), shirt);
+            Part("Head", PrimitiveType.Sphere, guest.transform, Vector3.up * 1.62f, Vector3.one * 0.32f, skin);
+            Part("Hair", PrimitiveType.Sphere, guest.transform, new Vector3(0f, 1.74f, -0.025f), new Vector3(0.33f, 0.12f, 0.3f), dark);
+            for (int i = -1; i <= 1; i += 2)
+                Part("Eye", PrimitiveType.Sphere, guest.transform, new Vector3(i * 0.065f, 1.65f, 0.145f), Vector3.one * 0.035f, dark);
+            leftArm = Part("LeftArm", PrimitiveType.Capsule, guest.transform, new Vector3(-0.31f, 1.03f, 0f), new Vector3(0.13f, 0.31f, 0.13f), skin).transform;
+            rightArm = Part("RightArm", PrimitiveType.Capsule, guest.transform, new Vector3(0.31f, 1.03f, 0f), new Vector3(0.13f, 0.31f, 0.13f), skin).transform;
+            leftLeg = Part("LeftLeg", PrimitiveType.Capsule, guest.transform, new Vector3(-0.13f, 0.39f, 0f), new Vector3(0.18f, 0.34f, 0.2f), dark).transform;
+            rightLeg = Part("RightLeg", PrimitiveType.Capsule, guest.transform, new Vector3(0.13f, 0.39f, 0f), new Vector3(0.18f, 0.34f, 0.2f), dark).transform;
+            BoxCollider hit = guest.AddComponent<BoxCollider>(); hit.isTrigger = true;
+            hit.center = Vector3.up * 1.05f; hit.size = new Vector3(0.7f, 1.5f, 0.5f); // 조준만 감지하고 플레이어를 밀지 않습니다.
+            if (kind != GuestKind.Regular)
+            {
+                orb = Part("CustomerStatusOrb", PrimitiveType.Sphere, guest.transform, Vector3.up * 2f, Vector3.one * 0.19f,
+                    kind == GuestKind.CheckID ? blue : red);
+            }
+            GameObject label = new GameObject("CustomerCaption"); label.layer = 2; label.transform.SetParent(guest.transform, false);
+            label.transform.localPosition = Vector3.up * 2.35f;
+            guestCaption = label.AddComponent<TextMesh>(); guestCaption.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            guestCaption.fontSize = 64; guestCaption.characterSize = 0.04f; guestCaption.anchor = TextAnchor.MiddleCenter;
+            guestCaption.color = Color.white; guestCaption.GetComponent<Renderer>().sharedMaterial = guestCaption.font.material;
+            SetCaption(kind == GuestKind.CheckID ? "ASK ID" : kind == GuestKind.Intoxicated ? "REJECT SERVICE" : "CUSTOMER");
+            state = State.Arriving;
+        }
+        private void SetCaption(string caption)
+        {
+            if (guestCaption == null) return;
+            guestCaption.text = caption; guestCaption.font.RequestCharactersInTexture(caption, 64);
+            guestCaption.transform.localScale = Vector3.one;
+            Bounds bounds = guestCaption.GetComponent<Renderer>().localBounds;
+            if (bounds.size.x > 0f && bounds.size.y > 0f)
+                guestCaption.transform.localScale = Vector3.one * Mathf.Min(1.5f / bounds.size.x, 0.15f / bounds.size.y);
+        }
+        private bool WalkTo(Vector3 target)
+        {
+            Vector3 delta = target - guest.transform.position;
+            if (delta.sqrMagnitude < 0.0025f) { guest.transform.position = target; return true; }
+            guest.transform.rotation = Quaternion.RotateTowards(guest.transform.rotation, Quaternion.LookRotation(delta), Time.deltaTime * 240f);
+            guest.transform.position = Vector3.MoveTowards(guest.transform.position, target, Time.deltaTime * 1.25f);
+            float swing = Mathf.Sin(Time.time * 8f) * 23f;
+            leftArm.localRotation = Quaternion.Euler(swing, 0f, 0f); rightArm.localRotation = Quaternion.Euler(-swing, 0f, 0f);
+            leftLeg.localRotation = Quaternion.Euler(-swing, 0f, 0f); rightLeg.localRotation = Quaternion.Euler(swing, 0f, 0f);
+            return false;
+        }
+        private bool AimingAtGuest()
+        {
+            return guest != null && Physics.Raycast(owner.playerCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f)),
+                out RaycastHit hit, 4f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Collide)
+                && hit.transform.IsChildOf(guest.transform);
+        }
+        private void OpenDialog()
+        {
+            dialogLock = Cursor.lockState; dialogCursor = Cursor.visible; dialogOpen = true;
+            Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
+        }
+        private void CloseDialog()
+        {
+            if (!dialogOpen) return;
+            dialogOpen = false; Cursor.lockState = dialogLock; Cursor.visible = dialogCursor;
+            owner.practiceReturnFrame = Time.frameCount;
+        }
+        public void Tick()
+        {
+            if (disposed) return;
+            root.SetActive(true);
+            if (guestCaption != null)
+            {
+                Vector3 away = guestCaption.transform.position - owner.playerCamera.transform.position;
+                if (away.sqrMagnitude > 0.001f) guestCaption.transform.rotation = Quaternion.LookRotation(away);
+            }
+            if (orb != null)
+            {
+                orb.transform.localPosition = new Vector3(Mathf.Sin(Time.time * 1.4f) * 0.05f, 2f + Mathf.Sin(Time.time * 2.5f) * 0.075f, 0f);
+                orb.transform.localScale = Vector3.one * (0.19f + Mathf.Sin(Time.time * 3f) * 0.025f);
+            }
+            if (dialogOpen) { if (owner.PressedRecipeClose()) CloseDialog(); return; }
+            if (state == State.Waiting) { if (Time.unscaledTime >= deadline) SpawnGuest(); return; }
+            if (state == State.Arriving)
+            {
+                if (!atAisle) { if (WalkTo(aisle)) atAisle = true; }
+                else if (WalkTo(counter))
+                {
+                    guest.transform.rotation = Quaternion.identity;
+                    leftArm.localRotation = rightArm.localRotation = leftLeg.localRotation = rightLeg.localRotation = Quaternion.identity;
+                    state = State.Screening;
+                    owner.ShowAction("CUSTOMER ARRIVED", "Approach the bar and click the customer to respond.", 3f);
+                }
+                return;
+            }
+            if (state == State.Receiving)
+            {
+                if (order < 2 && Time.unscaledTime >= deadline - 2f)
+                    owner.SetVisible(order == 0 ? owner.schoonerGlass : owner.pintGlass, false);
+                if (receivedDrink != null)
+                    receivedDrink.transform.position = Vector3.Lerp(drinkStart, guest.transform.position + new Vector3(0.31f, 1.21f, 0.23f),
+                        Mathf.Clamp01((Time.unscaledTime - (deadline - 2.5f)) / 1.4f));
+                if (Time.unscaledTime >= deadline)
+                {
+                    if (receivedDrink != null) receivedDrink.transform.SetParent(guest.transform, true);
+                    atAisle = false; state = State.Leaving;
+                }
+                return;
+            }
+            if (state == State.Leaving)
+            {
+                if (Time.unscaledTime < deadline) return;
+                if (!atAisle) { if (WalkTo(aisle)) atAisle = true; }
+                else if (WalkTo(entrance))
+                {
+                    UnityEngine.Object.Destroy(guest); guest = null; orb = null; guestCaption = null;
+                    if (receivedDrink != null) UnityEngine.Object.Destroy(receivedDrink);
+                    owner.ResetServiceGlasses(); order = -1; state = State.Waiting;
+                    deadline = Time.unscaledTime + Random.Range(6f, 11f);
+                }
+                return;
+            }
+            if (owner.practiceReturnFrame == Time.frameCount || Cursor.lockState != CursorLockMode.Locked) return;
+            if (state == State.Screening)
+            {
+                if (AimingAtGuest())
+                {
+                    owner.prompt = "LEFT CLICK - " + (kind == GuestKind.CheckID ? "ASK ID" : kind == GuestKind.Intoxicated ? "REJECT" : "Take order");
+                    if (owner.PressedLeftClick()) OpenDialog();
+                }
+                return;
+            }
+            if (HasCocktailOrder)
+            {
+                if (owner.IsNearCocktailStation())
+                {
+                    owner.prompt = "LEFT CLICK - Make " + orderNames[order] + " / 45 seconds / ONE attempt";
+                    if (owner.PressedLeftClick())
+                    {
+                        if (owner.practice != null) owner.practice.Dispose();
+                        owner.practice = new CocktailPractice(owner, order - 2, true);
+                    }
+                }
+                return;
+            }
+            if (!HasBeerOrder) return;
+            if (owner.serviceMarker != null) owner.serviceMarker.SetActive(true);
+            if (owner.pouring) { owner.prompt = "Pouring beer..."; return; }
+            if (owner.heldGlass == null) { owner.CheckGlassPickup(); return; }
+            if (owner.IsAimingAtServiceMarker())
+            {
+                int index = owner.HeldGlassIndex();
+                owner.prompt = owner.filled[index] ? "LEFT CLICK - Serve " + orderNames[order] : "Fill the glass at the beer tap first.";
+                if (owner.PressedLeftClick() && owner.filled[index]) owner.ServeGlass(index);
+                return;
+            }
+            owner.CheckPouring();
+            if (owner.PressedLeftClick() && !owner.pouring) owner.DropGlass();
+        }
+        private void AcceptOrder()
+        {
+            if (kind != GuestKind.Regular || state != State.Screening) return;
+            CloseDialog(); state = State.Preparing;
+            SetCaption(orderNames[order]);
+            owner.ShowAction("ORDER TAKEN", orderNames[order] + (order < 2 ? " - Fill and serve on the glowing marker." : " - Walk to the cocktail table."), 3f);
+        }
+        private void RefuseService()
+        {
+            if (state != State.Screening || (kind == GuestKind.CheckID && !idChecked) || kind == GuestKind.Regular) return;
+            CloseDialog(); refusedCount++; order = -1; state = State.Leaving; atAisle = false;
+            deadline = Time.unscaledTime + 2f;
+            SetCaption(kind == GuestKind.CheckID ? "UNDER 18 - NO SALE" : "SERVICE REFUSED");
+            owner.ShowAction("SALE REFUSED", kind == GuestKind.CheckID ? "ID checked: under 18. No alcohol served." : "Customer is intoxicated. No alcohol served.", 4f);
+        }
+        public void CompleteCocktail(bool success)
+        {
+            if (disposed || !HasCocktailOrder) return;
+            CompleteOrder(success);
+        }
+        public void CompleteBeer()
+        {
+            if (!disposed && HasBeerOrder) CompleteOrder(true);
+        }
+        private void CompleteOrder(bool success)
+        {
+            if (state != State.Preparing) return;
+            if (owner.serviceMarker != null) owner.serviceMarker.SetActive(false);
+            if (success)
+            {
+                servedCount++; state = State.Receiving; deadline = Time.unscaledTime + 2.5f;
+                SetCaption("THANK YOU!");
+                owner.ShowAction("ORDER SERVED", orderNames[order] + " delivered. The next customer arrives shortly.", 4f);
+                receivedDrink = new GameObject("CustomerDrink"); receivedDrink.transform.SetParent(root.transform, false);
+                drinkStart = owner.serviceMarker.transform.position + Vector3.up * 0.13f;
+                receivedDrink.transform.position = drinkStart;
+                float height = order == 1 || order == 4 ? 0.27f : 0.20f;
+                float diameter = order == 4 ? 0.10f : 0.13f;
+                drinkMaterial.color = order == 3 ? new Color(0.75f, 0.15f, 0.08f) : order == 4
+                    ? new Color(0.45f, 0.22f, 0.07f) : order == 2 ? new Color(0.65f, 0.92f, 0.75f) : new Color(1f, 0.65f, 0.13f);
+                Part("Glass", PrimitiveType.Cylinder, receivedDrink.transform, Vector3.zero, new Vector3(diameter, height * 0.5f, diameter), paper);
+                Part("Drink", PrimitiveType.Cylinder, receivedDrink.transform, Vector3.up * (height * 0.5f + 0.005f), new Vector3(diameter * 0.88f, 0.008f, diameter * 0.88f), drinkMaterial);
+                // 맥주잔은 서빙 위치에 0.5초 동안 남긴 뒤 손님에게 시각적으로 인계합니다.
+            }
+            else
+            {
+                missedCount++; state = State.Leaving; atAisle = false; deadline = Time.unscaledTime + 2f;
+                SetCaption("ORDER CANCELLED");
+                owner.ShowAction("ORDER FAILED", "This was your only attempt. No drink served. Wait for the next customer.", 4f);
+            }
+        }
+        public void Suspend() { CloseDialog(); if (root != null) root.SetActive(false); }
+        private void EnsureStyles()
+        {
+            if (bodyStyle != null) return;
+            bodyStyle = new GUIStyle(GUI.skin.label) { fontSize = 20, wordWrap = true, padding = new RectOffset(0, 0, 0, 0) };
+            bodyStyle.normal.textColor = new Color(0.89f, 0.96f, 0.93f);
+            titleStyle = new GUIStyle(bodyStyle) { fontSize = 27, fontStyle = FontStyle.Bold };
+            smallStyle = new GUIStyle(bodyStyle) { fontSize = 16 };
+            buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 21, fontStyle = FontStyle.Bold, wordWrap = true };
+        }
+        private static void Panel(Rect rect, Color color)
+        {
+            Color old = GUI.color; GUI.color = color; GUI.DrawTexture(rect, Texture2D.whiteTexture); GUI.color = old;
+        }
+        public void DrawTicket(Rect area)
+        {
+            if (state != State.Preparing || order < 0) return;
+            EnsureStyles();
+            Panel(area, new Color(0.025f, 0.09f, 0.095f, 0.97f));
+            Panel(new Rect(area.x, area.y, 5f, area.height), new Color(0.5f, 0.9f, 0.65f));
+            GUI.Label(new Rect(area.x + 16f, area.y + 12f, area.width - 32f, 25f), "ORDER #" + guestNumber.ToString("00"), smallStyle);
+            GUI.Label(new Rect(area.x + 16f, area.y + 46f, area.width - 32f, 80f), orderNames[order], titleStyle);
+            GUI.Label(new Rect(area.x + 16f, area.y + 140f, area.width - 32f, area.height - 150f), order < 2
+                ? "Pick up the correct glass.\nE at the tap to pour.\nLEFT CLICK the glowing serving spot."
+                : "Cocktail table\n45 seconds / ONE attempt\nMake the ordered drink, then press SERVE.", smallStyle);
+        }
+        public void Draw()
+        {
+            EnsureStyles();
+            float scale = Mathf.Min(Screen.width / 1280f, Screen.height / 720f);
+            Matrix4x4 saved = GUI.matrix; GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, Vector3.one * scale);
+            float width = Screen.width / scale, height = Screen.height / scale;
+            try
+            {
+                Panel(new Rect(width - 338f, 16f, 322f, 105f), new Color(0.025f, 0.06f, 0.1f, 0.94f));
+                GUI.Label(new Rect(width - 320f, 27f, 290f, 34f), "NIGHT SERVICE / OPEN", titleStyle);
+                GUI.Label(new Rect(width - 320f, 70f, 290f, 45f), "Served " + servedCount + "   Refused " + refusedCount + "   Missed " + missedCount, smallStyle);
+                DrawTicket(new Rect(16f, 24f, 272f, 292f));
+                string message = state == State.Waiting ? "The bar is open. Customers arrive every few seconds."
+                    : state == State.Arriving ? "A customer is approaching the counter."
+                    : state == State.Screening ? "Click the customer at the counter. Blue: ASK ID. Red: REJECT."
+                    : HasCocktailOrder ? "Take the order to the rear cocktail table."
+                    : HasBeerOrder ? "Pick up > Pour with E > Serve with LEFT CLICK"
+                    : state == State.Receiving ? "The customer is receiving the drink." : "Customer leaving. Next arrival shortly.";
+                if (Time.unscaledTime >= owner.actionUntil)
+                {
+                    Panel(new Rect((width - 660f) * 0.5f, height - 82f, 660f, 62f), new Color(0.025f, 0.06f, 0.1f, 0.94f));
+                    GUI.Label(new Rect((width - 624f) * 0.5f, height - 68f, 624f, 48f), message, bodyStyle);
+                }
+                if (HasBeerOrder && owner.serviceMarker != null)
+                {
+                    Vector3 screen = owner.playerCamera.WorldToScreenPoint(owner.serviceMarker.transform.position + Vector3.up * 0.36f);
+                    if (screen.z > 0f)
+                    {
+                        Rect tag = new Rect(Mathf.Clamp(screen.x / scale - 120f, 296f, width - 256f), Mathf.Clamp((Screen.height - screen.y) / scale, 150f, height - 160f), 240f, 68f);
+                        Panel(tag, new Color(0.02f, 0.17f, 0.16f, 0.94f)); GUI.Label(tag, "SERVE HERE\nLEFT CLICK", bodyStyle);
+                    }
+                }
+                if (!dialogOpen) return;
+                Panel(new Rect(0f, 0f, width, height), new Color(0f, 0f, 0f, 0.78f));
+                Rect modal = new Rect((width - 620f) * 0.5f, (height - 360f) * 0.5f, 620f, 360f);
+                Panel(modal, new Color(0.025f, 0.075f, 0.10f, 1f));
+                GUI.Label(new Rect(modal.x + 28f, modal.y + 25f, 564f, 45f), kind == GuestKind.CheckID ? "CHECK AGE BEFORE SERVICE"
+                    : kind == GuestKind.Intoxicated ? "INTOXICATED CUSTOMER" : "CUSTOMER ORDER", titleStyle);
+                string detail = kind == GuestKind.CheckID ? idChecked ? "ID CHECKED: UNDER 18\nDo not serve alcohol. Refuse the sale." : "This customer may be underage.\nAsk for ID before considering any sale."
+                    : kind == GuestKind.Intoxicated ? "This customer is visibly intoxicated.\nRefuse alcohol service." : "I'd like a " + orderNames[order] + ", please.";
+                GUI.Label(new Rect(modal.x + 28f, modal.y + 92f, 564f, 120f), detail, bodyStyle);
+                Rect primary = new Rect(modal.x + 28f, modal.yMax - 96f, 330f, 62f);
+                if (kind == GuestKind.Regular) { if (GUI.Button(primary, "TAKE ORDER", buttonStyle)) AcceptOrder(); }
+                else if (kind == GuestKind.CheckID && !idChecked)
+                { if (GUI.Button(primary, "ASK ID", buttonStyle)) { idChecked = true; SetCaption("ID: UNDER 18"); } }
+                else if (GUI.Button(primary, "REJECT / NO SALE", buttonStyle)) RefuseService();
+                if (GUI.Button(new Rect(modal.x + 378f, modal.yMax - 96f, 214f, 62f), "CLOSE [ESC]", buttonStyle)) CloseDialog();
+            }
+            finally { GUI.matrix = saved; }
+        }
+        public void Dispose()
+        {
+            if (disposed) return; disposed = true; CloseDialog();
+            if (root != null) UnityEngine.Object.Destroy(root);
+            foreach (Material material in materials) if (material != null) UnityEngine.Object.Destroy(material);
+            for (int i = 0; i < dimmedLights.Count; i++) if (dimmedLights[i] != null)
+            { dimmedLights[i].intensity = lightIntensities[i]; dimmedLights[i].color = lightColors[i]; }
+            RenderSettings.ambientMode = savedAmbientMode; RenderSettings.ambientLight = savedAmbient;
+            RenderSettings.ambientIntensity = savedAmbientIntensity; RenderSettings.reflectionIntensity = savedReflection;
+            RenderSettings.fog = savedFog; RenderSettings.fogMode = savedFogMode; RenderSettings.fogColor = savedFogColor; RenderSettings.fogDensity = savedFogDensity;
+            if (owner.playerCamera != null) { owner.playerCamera.clearFlags = savedClearFlags; owner.playerCamera.backgroundColor = savedBackground; }
+        }
+    }
+
+    private sealed class GlassHome
+    {
+        private readonly GameObject glass;
+        private readonly Transform parent;
+        private readonly Vector3 position, scale;
+        private readonly Quaternion rotation;
+        private readonly Collider[] colliders;
+        private readonly bool[] colliderStates;
+        public GlassHome(GameObject glass)
+        {
+            this.glass = glass; if (glass == null) return;
+            parent = glass.transform.parent; position = glass.transform.localPosition; rotation = glass.transform.localRotation; scale = glass.transform.localScale;
+            colliders = glass.GetComponentsInChildren<Collider>(true); colliderStates = new bool[colliders.Length];
+            for (int i = 0; i < colliders.Length; i++) colliderStates[i] = colliders[i].enabled;
+        }
+        public void Restore()
+        {
+            if (glass == null) return;
+            glass.transform.SetParent(parent, false); glass.transform.localPosition = position; glass.transform.localRotation = rotation; glass.transform.localScale = scale;
+            for (int i = 0; i < colliders.Length; i++) if (colliders[i] != null) colliders[i].enabled = colliderStates[i];
+            foreach (Renderer renderer in glass.GetComponentsInChildren<Renderer>()) renderer.enabled = true;
+        }
+    }
+
+    private void ResetServiceGlasses()
+    {
+        if (heldGlass != null) DropGlass();
+        for (int index = 0; index < 2; index++)
+        {
+            if (filledVisuals[index] != null) { filledVisuals[index].SetActive(false); Destroy(filledVisuals[index]); filledVisuals[index] = null; }
+            filled[index] = false;
+            if (glassHomes[index] != null) glassHomes[index].Restore();
+            if (serviceRings[index] != null) serviceRings[index].sharedMaterial = markerMaterial;
+        }
+    }
+
     private sealed class CocktailPractice
     {
         private enum Phase { ChooseGlass, Build, Stir, Shake, GlassIce, Transfer, TopUp, Ready }
         private const int Layer = 30;
-        private float RoundSeconds => trial == 0 ? 90f : trial == 1 ? 60f : 45f;
+        private readonly bool serviceOrder;
+        private float RoundSeconds => serviceOrder ? 45f : trial == 0 ? 90f : trial == 1 ? 60f : 45f;
         private const float TableY = 0.98f;
         private readonly BeerGlassPour owner;
         private readonly int recipe;
@@ -1561,11 +2052,12 @@ public class BeerGlassPour : MonoBehaviour
         private GUIStyle feedbackTitleStyle, feedbackDetailStyle;
         public bool IsActive { get; private set; }
 
-        public CocktailPractice(BeerGlassPour owner, int recipe)
+        public CocktailPractice(BeerGlassPour owner, int recipe, bool serviceOrder = false)
         {
             this.owner = owner;
+            this.serviceOrder = serviceOrder;
             this.recipe = Mathf.Clamp(recipe, 0, 2);
-            trial = Mathf.Clamp(owner.passedTrials[this.recipe], 0, 2);
+            trial = serviceOrder ? 1 : Mathf.Clamp(owner.passedTrials[this.recipe], 0, 2);
             sourceMovement = owner.GetComponent<BarPlayerMovement>();
             savedMovement = sourceMovement != null && sourceMovement.enabled;
             savedUniform = owner.uniform != null && owner.uniform.enabled;
@@ -1846,7 +2338,7 @@ public class BeerGlassPour : MonoBehaviour
             pendingPourTitle = ""; pendingPourDetail = "";
             strokes = 0; travel = 0f; travelDirection = 0; lastStrokeDirection = 0;
             failed = false; completed = false; error = ""; remaining = RoundSeconds;
-            awaitingStart = true; roundRecorded = false;
+            awaitingStart = !serviceOrder; roundRecorded = false;
             measure = 1f;
             jigger.transform.localPosition = jiggerHome;
             jigger.transform.localRotation = Quaternion.identity;
@@ -1906,7 +2398,7 @@ public class BeerGlassPour : MonoBehaviour
                 case Phase.Shake: return toolHeld ? "Shake for 15 full up / down round trips." : "Shaker ready. Click it to start shaking.";
                 case Phase.GlassIce: return "Click Ice to add ice to your serving glass.";
                 case Phase.Transfer: return "Click the shaker to pour into the iced long-drink glass.";
-                case Phase.Ready: return "Your cocktail is ready. Click FINISH.";
+                case Phase.Ready: return serviceOrder ? "Your cocktail is ready. Click SERVE." : "Your cocktail is ready. Click FINISH.";
                 default: return "Add ingredients in ANY ORDER. Match the totals below.";
             }
         }
@@ -1915,7 +2407,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             if (failed || completed) return;
             noticeUntil = 0f;
-            error = trial == 0 ? message : message.StartsWith("Time's up")
+            error = serviceOrder || trial == 0 ? message : message.StartsWith("Time's up")
                 ? "Time's up! The " + RoundSeconds.ToString("0") + "-second limit has expired."
                 : "The glass, ingredients, amounts or technique are not correct. Please try again.";
             failed = true; StopPour(false); ReturnTool();
@@ -2109,6 +2601,9 @@ public class BeerGlassPour : MonoBehaviour
         private Rect FinishButton() { return new Rect(Screen.width - 202f, Screen.height - 83f, 186f, 62f); }
         private bool OverUI(Vector2 pointer)
         {
+            if (serviceOrder) return ServiceTicketRect().Contains(pointer)
+                || new Rect(ServiceTicketRect().xMax + 16f, 0f, Screen.width, 132f).Contains(pointer)
+                || MeasurePanel().Contains(pointer) || FinishButton().Contains(pointer);
             if (trial == 2) return TimerOnlyRect().Contains(pointer);
             return new Rect(0f, 0f, Screen.width, 132f).Contains(pointer) || MeasurePanel().Contains(pointer)
                 || ((phase == Phase.Ready || trial == 1) && FinishButton().Contains(pointer));
@@ -2118,8 +2613,9 @@ public class BeerGlassPour : MonoBehaviour
             if (code >= 10 && code < 20)
             {
                 int index = code - 10;
-                float cellWidth = (Screen.width - 32f) / 5f;
-                return new Rect(16f + index % 5 * cellWidth, 136f + index / 5 * 54f, cellWidth - 6f, 48f);
+                float left = serviceOrder ? ServiceTicketRect().xMax + 16f : 16f;
+                float cellWidth = (Screen.width - left - 16f) / 5f;
+                return new Rect(left + index % 5 * cellWidth, 136f + index / 5 * 54f, cellWidth - 6f, 48f);
             }
             GameObject target = targets[code];
             float height = code >= 10 && code < 20 ? (code == 16 ? 0.17f : 0.49f) : -0.03f;
@@ -2240,6 +2736,7 @@ public class BeerGlassPour : MonoBehaviour
             }
             completed = true;
             if (owner.sounds != null) owner.sounds.PlayResult(true);
+            if (serviceOrder) { Exit(); return; }
             if (!roundRecorded)
             {
                 owner.passedTrials[recipe] = Mathf.Max(owner.passedTrials[recipe], trial + 1);
@@ -2257,6 +2754,8 @@ public class BeerGlassPour : MonoBehaviour
         }
         private bool ShowTargetLabel(int code)
         {
+            if (serviceOrder) return (code >= 10 && code < 20) || (code < 3 && phase == Phase.ChooseGlass)
+                || hovered == code || (code == 30 && phase == Phase.Stir) || (code == 31 && (phase == Phase.Shake || phase == Phase.Transfer));
             if (trial == 2) return false;
             if (trial == 1) return (code >= 10 && code < 20) || (code < 3 && phase == Phase.ChooseGlass) || hovered == code;
             if (code >= 10 && code < 20) return true;
@@ -2409,6 +2908,7 @@ public class BeerGlassPour : MonoBehaviour
             Cursor.lockState = savedCursor; Cursor.visible = savedCursorVisible;
             owner.practiceReturnFrame = Time.frameCount;
             ReleaseResources();
+            if (serviceOrder && owner.night != null) owner.night.CompleteCocktail(completed && !failed);
         }
         private void ReleaseResources()
         {
@@ -2419,6 +2919,48 @@ public class BeerGlassPour : MonoBehaviour
             foreach (Material material in materials) if (material != null) UnityEngine.Object.Destroy(material);
             foreach (Mesh mesh in meshes) if (mesh != null) UnityEngine.Object.Destroy(mesh);
         }
+        private Rect ServiceTicketRect() { return new Rect(16f, 16f, Mathf.Min(248f, Screen.width * 0.25f), 296f); }
+        private void DrawService()
+        {
+            if (failed)
+            {
+                Fill(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.82f));
+                float width = Mathf.Min(650f, Screen.width - 32f);
+                Rect panel = new Rect((Screen.width - width) * 0.5f, (Screen.height - 340f) * 0.5f, width, 340f);
+                Fill(panel, panelColor);
+                GUI.Label(new Rect(panel.x + 26f, panel.y + 26f, width - 52f, 44f), "ORDER FAILED", titleStyle);
+                GUI.Label(new Rect(panel.x + 26f, panel.y + 90f, width - 52f, 130f), error + "\n\nOne attempt per order. This customer will leave without a drink.", bodyStyle);
+                if (ActionButton(new Rect(panel.x + 26f, panel.yMax - 82f, width - 52f, 54f), "RETURN TO BAR", true)) Exit();
+                return;
+            }
+            owner.night.DrawTicket(ServiceTicketRect());
+            float left = ServiceTicketRect().xMax + 16f;
+            Fill(new Rect(left, 16f, Screen.width - left - 16f, 112f), panelColor);
+            GUI.Label(new Rect(left + 14f, 24f, Screen.width - left - 210f, 36f), "CUSTOMER ORDER / ONE ATTEMPT", smallStyle);
+            GUI.Label(new Rect(left + 14f, 62f, Screen.width - left - 210f, 56f), StageLabel(), bodyStyle);
+            Color old = GUI.color; GUI.color = remaining <= 10f ? new Color(1f, 0.44f, 0.32f) : ink;
+            GUI.Label(new Rect(Screen.width - 184f, 28f, 150f, 43f), remaining.ToString("0.0") + " s", timerStyle); GUI.color = old;
+            GUI.Label(new Rect(Screen.width - 184f, 78f, 150f, 24f), "45 SECONDS", timerCaptionStyle);
+            foreach (int code in targets.Keys)
+            {
+                if (!ShowTargetLabel(code)) continue;
+                if (code >= 10 && code < 20) { DrawIngredientTile(code); continue; }
+                Rect rect = LabelRect(code); Fill(rect, panelColor); GUI.Label(rect, TargetName(code), labelStyle);
+            }
+            DrawMeasureControls();
+            Rect hint = new Rect(334f, Screen.height - 118f, Mathf.Max(150f, Screen.width - 566f), 102f);
+            Fill(hint, panelColor);
+            bool mixing = phase == Phase.Stir || phase == Phase.Shake;
+            GUI.Label(new Rect(hint.x + 12f, hint.y + 7f, hint.width - 24f, 32f), mixing
+                ? (phase == Phase.Stir ? "STIR" : "SHAKE") + "  " + (strokes / 2) + " / 15"
+                : phase == Phase.Ready ? "READY TO SERVE" : "MAKE THE ORDERED DRINK", bodyStyle);
+            GUI.Label(new Rect(hint.x + 12f, hint.y + 43f, hint.width - 24f, 50f), mixing
+                ? "Hold LEFT CLICK and move " + (phase == Phase.Stir ? "left / right." : "up / down.")
+                : "ENTER / SERVE submits. ESC cancels this order.", smallStyle);
+            if (!pouring && ActionButton(FinishButton(), "SERVE", true)) TryFinish();
+            DrawNotice();
+        }
+
         private void DrawTrialIntro()
         {
             Fill(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.8f));
@@ -2519,6 +3061,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             if (!IsActive) return;
             EnsureStyles();
+            if (serviceOrder) { DrawService(); return; }
             if (awaitingStart) { DrawTrialIntro(); return; }
             if (failed || completed) { DrawTrialResult(); return; }
             if (trial == 2)
