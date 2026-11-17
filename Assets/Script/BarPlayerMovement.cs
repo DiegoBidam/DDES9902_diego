@@ -12,6 +12,7 @@ public class BarPlayerMovement : MonoBehaviour
 
     private CharacterController controller;
     private BeerGlassPour beerInteraction;
+    private BarIntro intro;
     private Transform view;
     private float pitch;
     private float verticalSpeed;
@@ -24,7 +25,8 @@ public class BarPlayerMovement : MonoBehaviour
     {
         controller = GetComponent<CharacterController>();
         beerInteraction = GetComponent<BeerGlassPour>();
-        // 시작 메뉴에서 이동이 비활성화되어도 양쪽 스테이지의 벽은 미리 만듭니다.
+        intro = GetComponent<BarIntro>();
+        // 시작 대기 중에도 양쪽 스테이지의 벽을 미리 만듭니다.
         CreateActivityWalls();
     }
 
@@ -94,6 +96,9 @@ public class BarPlayerMovement : MonoBehaviour
         clicked = Input.GetMouseButtonDown(0);
         escape = Input.GetKeyDown(KeyCode.Escape);
 #endif
+
+        // 시작 전에는 위치 이동만 막습니다. 마우스 시점/커서 입력은 그대로 처리합니다.
+        if (intro != null && intro.IsWaitingToStart) movement = Vector2.zero;
 
         // 음성 안내 중에도 이동/시점을 허용합니다. 행위 입력은 각 상호작용 스크립트에서 막습니다.
         // 레시피 창을 열었을 때만 메뉴 조작을 위해 이동/시점 입력을 비웁니다.

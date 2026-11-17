@@ -1,6 +1,10 @@
 using System.Collections;
 using UnityEngine;
 
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
+
 [RequireComponent(typeof(AudioSource))]
 public class BarIntro : MonoBehaviour
 {
@@ -18,6 +22,8 @@ public class BarIntro : MonoBehaviour
     private bool started;
     private bool finished;
     private GUIStyle messageStyle;
+    private GUIStyle startButtonStyle;
+    public bool IsWaitingToStart => !started;
 
     void Awake()
     {
@@ -37,12 +43,12 @@ public class BarIntro : MonoBehaviour
             return;
         }
 
-        // 시작 메뉴에서만 이동을 멈추고, 안내 중에는 행위만 잠급니다.
-        movement.enabled = false;
+        // 시작 대기 중에는 걷기만 막고 일인칭 시점은 계속 허용합니다.
+        movement.enabled = true;
         uniform.enabled = false;
 
-        Cursor.lockState = CursorLockMode.None;
-        Cursor.visible = true;
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
         StartBackgroundMusic();
     }
 
@@ -118,6 +124,8 @@ public class BarIntro : MonoBehaviour
 
     void Update()
     {
+        // 음악 로딩 여부와 관계없이 시작 입력은 처리합니다.
+        if (!started && PressedStart()) StartCoroutine(PlayIntro());
         if (musicSource == null) return;
         bool speaking = (voiceSource != null && voiceSource.isPlaying)
             || (uniform != null && uniform.IsGuidePlaying)
@@ -134,8 +142,19 @@ public class BarIntro : MonoBehaviour
         if (musicClip != null) Destroy(musicClip);
     }
 
+    bool PressedStart()
+    {
+#if ENABLE_INPUT_SYSTEM
+        return Keyboard.current != null && (Keyboard.current.enterKey.wasPressedThisFrame
+            || Keyboard.current.numpadEnterKey.wasPressedThisFrame);
+#else
+        return Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter);
+#endif
+    }
+
     IEnumerator PlayIntro()
     {
+        if (started) yield break;
         started = true;
         movement.enabled = true;
         Cursor.lockState = CursorLockMode.Locked;
@@ -161,47 +180,37 @@ public class BarIntro : MonoBehaviour
 
     void OnGUI()
     {
-        if (finished)
-            return;
-
+        if (finished) return;
         if (messageStyle == null)
         {
-            messageStyle = new GUIStyle(GUI.skin.label);
-            messageStyle.fontSize = 22;
-            messageStyle.alignment = TextAnchor.MiddleCenter;
-            messageStyle.wordWrap = true;
+            messageStyle = new GUIStyle(GUI.skin.label) { fontSize = 22,
+                alignment = TextAnchor.MiddleCenter, wordWrap = true };
             messageStyle.normal.textColor = Color.white;
+            startButtonStyle = new GUIStyle(GUI.skin.button) { fontSize = 24,
+                fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
         }
 
-        float width = Mathf.Min(560f, Screen.width - 30f);
-        float left = (Screen.width - width) / 2f;
-        float top = Screen.height / 2f - 80f;
-
-        GUI.Box(new Rect(left, top, width, 160f), "");
-
+        float width = Mathf.Min(560f, Screen.width - 32f);
+        float left = (Screen.width - width) * 0.5f;
+        float centerY = Screen.height * 0.5f;
         if (!started)
         {
-            GUI.Label(
-                new Rect(left + 10, top + 15, width - 20, 50),
-                "Your first shift",
-                messageStyle
-            );
+            GUI.Box(new Rect(left, centerY - 128f, width, 256f), "");
+            GUI.Label(new Rect(left + 16f, centerY - 112f, width - 32f, 34f),
+                "Your first shift", messageStyle);
+            GUI.Label(new Rect(left + 16f, centerY - 72f, width - 32f, 28f),
+                "Look around with the mouse.", messageStyle);
+            if (GUI.Button(new Rect((Screen.width - 240f) * 0.5f, centerY - 30f, 240f, 60f),
+                "START  [ENTER]", startButtonStyle)) StartCoroutine(PlayIntro());
+            GUI.Label(new Rect(left + 16f, centerY + 44f, width - 32f, 68f),
+                "Press ENTER to start.\nMovement unlocks when you start.", messageStyle);
+            return;
+        }
 
-            if (GUI.Button(
-                new Rect(Screen.width / 2f - 100, top + 85, 200, 50),
-                "Click to start"))
-            {
-                StartCoroutine(PlayIntro());
-            }
-        }
-        else
-        {
-            GUI.Label(
-                new Rect(left + 15, top + 15, width - 30, 130),
-                "Welcome to your first shift!\nHead inside the bar.",
-                messageStyle
-            );
-        }
+        Rect area = new Rect(left, centerY - 80f, width, 160f);
+        GUI.Box(area, "");
+        GUI.Label(new Rect(left + 15f, area.y + 15f, width - 30f, 130f),
+            "Welcome to your first shift!\nHead inside the bar.", messageStyle);
     }
     // 첨부 MP3 원본: Tools/AudioSources/PourAndPlay.mp3.
     // 전체 길이/스테레오를 유지한 Ogg를 포함해 기존 스크립트 동기화만으로 재생합니다.
