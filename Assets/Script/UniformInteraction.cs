@@ -531,11 +531,7 @@ public class UniformInteraction : MonoBehaviour
 
             if (!string.IsNullOrEmpty(prompt))
             {
-                GUI.Label(
-                    new Rect(0, Screen.height / 2f + 40, Screen.width, 45),
-                    prompt,
-                    textStyle
-                );
+                InteractionPromptUI.Draw(prompt);
             }
         }
 
