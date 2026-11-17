@@ -37,6 +37,7 @@ public class BarIntro : MonoBehaviour
             return;
         }
 
+        // 시작 메뉴에서만 이동을 멈추고, 안내 중에는 행위만 잠급니다.
         movement.enabled = false;
         uniform.enabled = false;
 
@@ -136,6 +137,9 @@ public class BarIntro : MonoBehaviour
     IEnumerator PlayIntro()
     {
         started = true;
+        movement.enabled = true;
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
 
         if (welcomeVoice != null && voiceSource.isActiveAndEnabled)
         {
@@ -151,12 +155,8 @@ public class BarIntro : MonoBehaviour
 
         finished = true;
 
-        movement.enabled = true;
+        // 음성 종료 후 행위만 해제합니다. 이동/시점과 사용자의 커서 상태는 유지합니다.
         uniform.enabled = true;
-
-        // 음성이 끝난 뒤 Game 화면 클릭으로 시점을 잠급니다.
-        Cursor.lockState = CursorLockMode.None;
-        Cursor.visible = true;
     }
 
     void OnGUI()

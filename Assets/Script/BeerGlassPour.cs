@@ -766,7 +766,7 @@ public class BeerGlassPour : MonoBehaviour
             float width = Mathf.Min(640f, Screen.width - 32f);
             Rect guidePanel = new Rect((Screen.width - width) * 0.5f, Screen.height * 0.5f - 70f, width, 140f);
             GUI.Box(guidePanel, "");
-            GUI.Label(guidePanel, heading + "\nListen to the guide...", textStyle);
+            GUI.Label(guidePanel, heading + "\nListen to the guide...\nYou can move. Interact after the guide ends.", textStyle);
             return;
         }
 

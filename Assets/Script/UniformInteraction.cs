@@ -177,14 +177,12 @@ public class UniformInteraction : MonoBehaviour
     private IEnumerator StartShiftRoutine()
     {
         shiftStarted = true;
+        // 안내가 끝날 때까지 행위만 잠급니다. 이동 컴포넌트와 커서는 그대로 유지합니다.
         showingShiftMessage = true;
         prompt = "";
         subtitle = "Shift started. Welcome to the beer station.";
 
         HideClockGuide();
-
-        if (movement != null)
-            movement.enabled = false;
 
         PlayGuide(shiftStartVoice, subtitle);
 
@@ -211,9 +209,6 @@ public class UniformInteraction : MonoBehaviour
             Debug.LogWarning("BeerStageSpawn이 연결되지 않았습니다.");
         }
 
-        Cursor.lockState = CursorLockMode.None;
-        Cursor.visible = true;
-
         // 출근 안내와 스테이션 안내는 같은 소스로 순서대로 재생합니다.
         yield return WaitForGuidePlayback();
         if (reachedBeerStation)
@@ -231,9 +226,6 @@ public class UniformInteraction : MonoBehaviour
         showingShiftMessage = false;
         ShiftCompleted = true;
         ConfirmStep("SHIFT STARTED");
-
-        if (movement != null)
-            movement.enabled = true;
     }
 
     private IEnumerator WaitForGuidePlayback()
@@ -513,7 +505,8 @@ public class UniformInteraction : MonoBehaviour
             GUI.Box(area, "");
             GUI.Label(
                 area,
-                playingStationTrialVoice ? "BAR STATION\nListen to the guide..." : "Shift started.\nWelcome to the beer station.",
+                (playingStationTrialVoice ? "BAR STATION\nListen to the guide..." : "Shift started.\nWelcome to the beer station.")
+                    + "\nYou can move. Interact after the guide ends.",
                 textStyle
             );
 
