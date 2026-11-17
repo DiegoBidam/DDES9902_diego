@@ -64,7 +64,8 @@ public class BeerGlassPour : MonoBehaviour
     private NightService night;
     private readonly GlassHome[] glassHomes = new GlassHome[2];
     private bool AllTrialsComplete => passedTrials[0] >= 3 && passedTrials[1] >= 3 && passedTrials[2] >= 3;
-    public bool IsRecipeOpen => practiceReturnFrame == Time.frameCount || (recipeCards != null && recipeCards.BlocksInput) || (night != null && night.IsDialogOpen);
+    public bool IsRecipeOpen => barOpened ? night != null && night.IsDialogOpen
+        : practiceReturnFrame == Time.frameCount || (recipeCards != null && recipeCards.BlocksInput);
     private readonly LineRenderer[] serviceRings = new LineRenderer[2];
     private Material markerMaterial;
     private Material completedMaterial;
@@ -989,7 +990,9 @@ public class BeerGlassPour : MonoBehaviour
         barOpened = true;
         if (recipeCards != null) recipeCards.SetAvailable(false);
         night = new NightService(this);
-        ShowAction("BAR OPEN / NIGHT SERVICE", "Customers will arrive shortly. Blue: ASK ID. Red: REJECT.", 4f);
+        // OPEN 클릭은 메뉴를 닫고 즉시 일인칭 마우스 시점으로 돌아갑니다. 전환용 입력 잠금은 없습니다.
+        Cursor.lockState = CursorLockMode.Locked; Cursor.visible = false;
+        ShowAction("BAR OPEN / NIGHT SERVICE", "Customers will arrive shortly. Observe each guest and choose how to respond.", 4f);
     }
 
     void DrawTrialChecks(Rect area, int recipe, GUIStyle labelStyle)
@@ -1532,7 +1535,7 @@ public class BeerGlassPour : MonoBehaviour
         private enum State { Waiting, Arriving, Screening, Preparing, Receiving, Leaving }
         private readonly BeerGlassPour owner;
         private readonly GameObject root;
-        private GameObject guest, orb, receivedDrink;
+        private GameObject guest, receivedDrink;
         private Transform leftArm, rightArm, leftLeg, rightLeg;
         private TextMesh guestCaption;
         private State state;
@@ -1549,7 +1552,18 @@ public class BeerGlassPour : MonoBehaviour
         private readonly System.Collections.Generic.List<Light> dimmedLights = new System.Collections.Generic.List<Light>();
         private readonly System.Collections.Generic.List<float> lightIntensities = new System.Collections.Generic.List<float>();
         private readonly System.Collections.Generic.List<Color> lightColors = new System.Collections.Generic.List<Color>();
-        private Material skin, dark, shirt, blue, red, paper, drinkMaterial;
+        private Material skin, face, dark, shirt, paper, drinkMaterial;
+        private const float NightFadeSeconds = 8f;
+        private float nightElapsed, skyExposure, skySunSize;
+        private readonly Material savedGlobalSkybox, savedSkybox;
+        private Material nightSkybox;
+        private readonly Skybox cameraSkybox;
+        private readonly Material savedCameraSkybox;
+        private readonly Color savedSkyColor, savedEquatorColor, savedGroundColor;
+        private readonly System.Collections.Generic.List<Light> nightLamps = new System.Collections.Generic.List<Light>();
+        private readonly System.Collections.Generic.List<float> lampIntensities = new System.Collections.Generic.List<float>();
+        private readonly System.Collections.Generic.List<string> skyColorProperties = new System.Collections.Generic.List<string>();
+        private readonly System.Collections.Generic.List<Color> skyColors = new System.Collections.Generic.List<Color>();
         private readonly UnityEngine.Rendering.AmbientMode savedAmbientMode;
         private readonly Color savedAmbient, savedFogColor, savedBackground;
         private readonly float savedAmbientIntensity, savedReflection, savedFogDensity;
@@ -1570,6 +1584,11 @@ public class BeerGlassPour : MonoBehaviour
             savedFog = RenderSettings.fog; savedFogMode = RenderSettings.fogMode;
             savedFogColor = RenderSettings.fogColor; savedFogDensity = RenderSettings.fogDensity;
             savedBackground = owner.playerCamera.backgroundColor; savedClearFlags = owner.playerCamera.clearFlags;
+            savedGlobalSkybox = RenderSettings.skybox;
+            cameraSkybox = owner.playerCamera.GetComponent<Skybox>();
+            savedCameraSkybox = cameraSkybox != null ? cameraSkybox.material : null;
+            savedSkybox = cameraSkybox != null && cameraSkybox.enabled && savedCameraSkybox != null ? savedCameraSkybox : savedGlobalSkybox;
+            savedSkyColor = RenderSettings.ambientSkyColor; savedEquatorColor = RenderSettings.ambientEquatorColor; savedGroundColor = RenderSettings.ambientGroundColor;
             root = new GameObject("NightService_Runtime");
             UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(root, owner.gameObject.scene);
             Bounds bar = owner.serviceDesk.bounds;
@@ -1580,10 +1599,10 @@ public class BeerGlassPour : MonoBehaviour
             aisle = new Vector3(counter.x, ground, Mathf.Lerp(entrance.z, counter.z, 0.6f));
             skin = MakeMaterial(new Color(0.75f, 0.51f, 0.34f)); dark = MakeMaterial(new Color(0.07f, 0.09f, 0.13f));
             shirt = MakeMaterial(new Color(0.25f, 0.62f, 0.53f));
-            blue = MakeMaterial(new Color(0.16f, 0.53f, 1f), true); red = MakeMaterial(new Color(1f, 0.16f, 0.14f), true);
+            face = MakeMaterial(skin.color);
             paper = MakeMaterial(new Color(0.87f, 0.94f, 0.91f), true);
             drinkMaterial = MakeMaterial(new Color(1f, 0.65f, 0.13f), true);
-            SetNight(); ShuffleEncounters();
+            BeginNightTransition(); ShuffleEncounters();
             owner.ResetServiceGlasses();
             if (owner.serviceMarker != null) owner.serviceMarker.SetActive(false);
             state = State.Waiting; deadline = Time.unscaledTime + 5f;
@@ -1607,23 +1626,32 @@ public class BeerGlassPour : MonoBehaviour
         {
             GameObject obj = new GameObject("NightBarLight"); obj.transform.SetParent(root.transform, false); obj.transform.position = position;
             Light light = obj.AddComponent<Light>(); light.type = LightType.Point; light.range = 7f;
-            light.intensity = intensity; light.color = color; light.shadows = LightShadows.None;
+            light.intensity = 0f; light.color = color; light.shadows = LightShadows.None;
+            nightLamps.Add(light); lampIntensities.Add(intensity);
         }
-        private void SetNight()
+        private void BeginNightTransition()
         {
-            owner.playerCamera.clearFlags = CameraClearFlags.SolidColor;
-            owner.playerCamera.backgroundColor = new Color(0.012f, 0.022f, 0.065f);
-            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
-            RenderSettings.ambientLight = new Color(0.3f, 0.36f, 0.52f); RenderSettings.ambientIntensity = 0.7f;
-            RenderSettings.reflectionIntensity = 0.35f;
-            RenderSettings.fog = true; RenderSettings.fogMode = FogMode.ExponentialSquared;
-            RenderSettings.fogColor = new Color(0.025f, 0.035f, 0.09f); RenderSettings.fogDensity = 0.018f;
+            // 원본 하늘 재질은 건드리지 않고 복제본의 색/밝기만 천천히 바꿉니다.
+            if (savedSkybox != null)
+            {
+                nightSkybox = new Material(savedSkybox);
+                if (cameraSkybox != null && cameraSkybox.enabled && cameraSkybox.material != null)
+                    cameraSkybox.material = nightSkybox;
+                else RenderSettings.skybox = nightSkybox;
+                string[] names = { "_SkyTint", "_GroundColor", "_Tint" };
+                foreach (string name in names)
+                    if (nightSkybox.HasProperty(name)) { skyColorProperties.Add(name); skyColors.Add(nightSkybox.GetColor(name)); }
+                if (nightSkybox.HasProperty("_Exposure")) skyExposure = nightSkybox.GetFloat("_Exposure");
+                if (nightSkybox.HasProperty("_SunSize")) skySunSize = nightSkybox.GetFloat("_SunSize");
+            }
+            // Trilight는 현재 하늘/수평선/지면 색에서 시작하므로 갑자기 평면 조명으로 바뀌지 않습니다.
+            RenderSettings.ambientMode = savedAmbientMode == UnityEngine.Rendering.AmbientMode.Skybox
+                ? UnityEngine.Rendering.AmbientMode.Trilight : savedAmbientMode;
             foreach (GameObject sceneRoot in owner.gameObject.scene.GetRootGameObjects())
                 foreach (Light light in sceneRoot.GetComponentsInChildren<Light>())
                     if (light.type == LightType.Directional)
                     {
                         dimmedLights.Add(light); lightIntensities.Add(light.intensity); lightColors.Add(light.color);
-                        light.intensity = 0.22f; light.color = new Color(0.48f, 0.61f, 1f);
                     }
             Lamp(owner.serviceDesk.bounds.center + Vector3.up * 2f, new Color(1f, 0.72f, 0.42f), 3f);
             Lamp(entrance + Vector3.up * 2.5f, new Color(0.35f, 0.55f, 1f), 2f);
@@ -1637,6 +1665,36 @@ public class BeerGlassPour : MonoBehaviour
             text.GetComponent<Renderer>().sharedMaterial = text.font.material;
             sign.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
         }
+        private void TickNightTransition()
+        {
+            if (nightElapsed >= NightFadeSeconds) return;
+            nightElapsed = Mathf.Min(NightFadeSeconds, nightElapsed + Time.unscaledDeltaTime);
+            float blend = Mathf.SmoothStep(0f, 1f, nightElapsed / NightFadeSeconds);
+            Color nightAmbient = new Color(0.3f, 0.36f, 0.52f);
+            owner.playerCamera.backgroundColor = Color.Lerp(savedBackground, new Color(0.012f, 0.022f, 0.065f), blend);
+            RenderSettings.ambientLight = Color.Lerp(savedAmbient, nightAmbient, blend);
+            RenderSettings.ambientSkyColor = Color.Lerp(savedSkyColor, nightAmbient, blend);
+            RenderSettings.ambientEquatorColor = Color.Lerp(savedEquatorColor, nightAmbient * 0.75f, blend);
+            RenderSettings.ambientGroundColor = Color.Lerp(savedGroundColor, nightAmbient * 0.45f, blend);
+            RenderSettings.ambientIntensity = Mathf.Lerp(savedAmbientIntensity, 0.7f, blend);
+            RenderSettings.reflectionIntensity = Mathf.Lerp(savedReflection, 0.35f, blend);
+            // 기존 안개 모드와 거리는 유지하고 색만 보간해 모드 전환으로 인한 깜빡임을 피합니다.
+            if (savedFog) RenderSettings.fogColor = Color.Lerp(savedFogColor, new Color(0.025f, 0.035f, 0.09f), blend);
+            for (int i = 0; i < dimmedLights.Count; i++) if (dimmedLights[i] != null)
+            {
+                dimmedLights[i].intensity = Mathf.Lerp(lightIntensities[i], 0.22f, blend);
+                dimmedLights[i].color = Color.Lerp(lightColors[i], new Color(0.48f, 0.61f, 1f), blend);
+            }
+            for (int i = 0; i < nightLamps.Count; i++) if (nightLamps[i] != null)
+                nightLamps[i].intensity = lampIntensities[i] * blend;
+            if (nightSkybox != null)
+            {
+                for (int i = 0; i < skyColorProperties.Count; i++)
+                    nightSkybox.SetColor(skyColorProperties[i], Color.Lerp(skyColors[i], new Color(0.035f, 0.065f, 0.16f), blend));
+                if (nightSkybox.HasProperty("_Exposure")) nightSkybox.SetFloat("_Exposure", Mathf.Lerp(skyExposure, 0.12f, blend));
+                if (nightSkybox.HasProperty("_SunSize")) nightSkybox.SetFloat("_SunSize", Mathf.Lerp(skySunSize, 0f, blend));
+            }
+        }
         private void ShuffleEncounters()
         {
             for (int i = encounters.Length - 1; i > 0; i--)
@@ -1648,38 +1706,44 @@ public class BeerGlassPour : MonoBehaviour
             if (encounterIndex >= encounters.Length) ShuffleEncounters();
             int encounter = encounters[encounterIndex++];
             kind = encounter == 3 ? GuestKind.CheckID : encounter == 4 ? GuestKind.Intoxicated : GuestKind.Regular;
-            order = kind != GuestKind.Regular ? -1 : encounter == 2 ? Random.Range(2, 5) : encounter;
+            order = kind != GuestKind.Regular ? Random.Range(0, 5) : encounter == 2 ? Random.Range(2, 5) : encounter;
             guestNumber++; idChecked = false; atAisle = false;
             guest = new GameObject("Customer_" + guestNumber); guest.transform.SetParent(root.transform, false); guest.transform.position = entrance;
             shirt.color = Color.HSVToRGB(Random.value, 0.45f, 0.75f);
-            Part("Body", PrimitiveType.Capsule, guest.transform, Vector3.up * 1.03f, new Vector3(0.49f, 0.39f, 0.29f), shirt);
-            Part("Head", PrimitiveType.Sphere, guest.transform, Vector3.up * 1.62f, Vector3.one * 0.32f, skin);
-            Part("Hair", PrimitiveType.Sphere, guest.transform, new Vector3(0f, 1.74f, -0.025f), new Vector3(0.33f, 0.12f, 0.3f), dark);
+            bool younger = kind == GuestKind.CheckID;
+            float headY = younger ? 1.51f : 1.62f;
+            face.color = kind == GuestKind.Intoxicated ? new Color(0.87f, 0.31f, 0.27f) : skin.color;
+            Part("Body", PrimitiveType.Capsule, guest.transform, Vector3.up * (younger ? 0.99f : 1.03f),
+                younger ? new Vector3(0.42f, 0.35f, 0.27f) : new Vector3(0.49f, 0.39f, 0.29f), shirt);
+            Part("Head", PrimitiveType.Sphere, guest.transform, Vector3.up * headY, Vector3.one * (younger ? 0.35f : 0.32f), face);
+            Part("Hair", PrimitiveType.Sphere, guest.transform, new Vector3(0f, headY + 0.12f, -0.025f), new Vector3(0.34f, 0.12f, 0.3f), dark);
+            if (younger)
+                Part("Fringe", PrimitiveType.Sphere, guest.transform, new Vector3(0f, headY + 0.09f, 0.1f), new Vector3(0.32f, 0.08f, 0.13f), dark);
+            else
+                Part("Chin", PrimitiveType.Sphere, guest.transform, new Vector3(0f, headY - 0.10f, 0.10f), new Vector3(0.17f, 0.06f, 0.09f), dark);
             for (int i = -1; i <= 1; i += 2)
-                Part("Eye", PrimitiveType.Sphere, guest.transform, new Vector3(i * 0.065f, 1.65f, 0.145f), Vector3.one * 0.035f, dark);
+                Part("Eye", PrimitiveType.Sphere, guest.transform, new Vector3(i * 0.065f, headY + 0.025f, younger ? 0.162f : 0.145f),
+                    Vector3.one * (younger ? 0.043f : 0.035f), dark);
             leftArm = Part("LeftArm", PrimitiveType.Capsule, guest.transform, new Vector3(-0.31f, 1.03f, 0f), new Vector3(0.13f, 0.31f, 0.13f), skin).transform;
             rightArm = Part("RightArm", PrimitiveType.Capsule, guest.transform, new Vector3(0.31f, 1.03f, 0f), new Vector3(0.13f, 0.31f, 0.13f), skin).transform;
             leftLeg = Part("LeftLeg", PrimitiveType.Capsule, guest.transform, new Vector3(-0.13f, 0.39f, 0f), new Vector3(0.18f, 0.34f, 0.2f), dark).transform;
             rightLeg = Part("RightLeg", PrimitiveType.Capsule, guest.transform, new Vector3(0.13f, 0.39f, 0f), new Vector3(0.18f, 0.34f, 0.2f), dark).transform;
             BoxCollider hit = guest.AddComponent<BoxCollider>(); hit.isTrigger = true;
             hit.center = Vector3.up * 1.05f; hit.size = new Vector3(0.7f, 1.5f, 0.5f); // 조준만 감지하고 플레이어를 밀지 않습니다.
-            if (kind != GuestKind.Regular)
-            {
-                orb = Part("CustomerStatusOrb", PrimitiveType.Sphere, guest.transform, Vector3.up * 2f, Vector3.one * 0.19f,
-                    kind == GuestKind.CheckID ? blue : red);
-            }
             GameObject label = new GameObject("CustomerCaption"); label.layer = 2; label.transform.SetParent(guest.transform, false);
             label.transform.localPosition = Vector3.up * 2.35f;
             guestCaption = label.AddComponent<TextMesh>(); guestCaption.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             guestCaption.fontSize = 64; guestCaption.characterSize = 0.04f; guestCaption.anchor = TextAnchor.MiddleCenter;
             guestCaption.color = Color.white; guestCaption.GetComponent<Renderer>().sharedMaterial = guestCaption.font.material;
-            SetCaption(kind == GuestKind.CheckID ? "ASK ID" : kind == GuestKind.Intoxicated ? "REJECT SERVICE" : "CUSTOMER");
+            SetCaption(""); // 응대 전에는 나이나 취한 상태를 문자로 알려주지 않습니다.
             state = State.Arriving;
         }
         private void SetCaption(string caption)
         {
             if (guestCaption == null) return;
-            guestCaption.text = caption; guestCaption.font.RequestCharactersInTexture(caption, 64);
+            guestCaption.text = caption;
+            if (string.IsNullOrEmpty(caption)) return;
+            guestCaption.font.RequestCharactersInTexture(caption, 64);
             guestCaption.transform.localScale = Vector3.one;
             Bounds bounds = guestCaption.GetComponent<Renderer>().localBounds;
             if (bounds.size.x > 0f && bounds.size.y > 0f)
@@ -1717,15 +1781,11 @@ public class BeerGlassPour : MonoBehaviour
         {
             if (disposed) return;
             root.SetActive(true);
+            TickNightTransition();
             if (guestCaption != null)
             {
                 Vector3 away = guestCaption.transform.position - owner.playerCamera.transform.position;
                 if (away.sqrMagnitude > 0.001f) guestCaption.transform.rotation = Quaternion.LookRotation(away);
-            }
-            if (orb != null)
-            {
-                orb.transform.localPosition = new Vector3(Mathf.Sin(Time.time * 1.4f) * 0.05f, 2f + Mathf.Sin(Time.time * 2.5f) * 0.075f, 0f);
-                orb.transform.localScale = Vector3.one * (0.19f + Mathf.Sin(Time.time * 3f) * 0.025f);
             }
             if (dialogOpen) { if (owner.PressedRecipeClose()) CloseDialog(); return; }
             if (state == State.Waiting) { if (Time.unscaledTime >= deadline) SpawnGuest(); return; }
@@ -1761,7 +1821,7 @@ public class BeerGlassPour : MonoBehaviour
                 if (!atAisle) { if (WalkTo(aisle)) atAisle = true; }
                 else if (WalkTo(entrance))
                 {
-                    UnityEngine.Object.Destroy(guest); guest = null; orb = null; guestCaption = null;
+                    UnityEngine.Object.Destroy(guest); guest = null; guestCaption = null;
                     if (receivedDrink != null) UnityEngine.Object.Destroy(receivedDrink);
                     owner.ResetServiceGlasses(); order = -1; state = State.Waiting;
                     deadline = Time.unscaledTime + Random.Range(6f, 11f);
@@ -1773,7 +1833,7 @@ public class BeerGlassPour : MonoBehaviour
             {
                 if (AimingAtGuest())
                 {
-                    owner.prompt = "LEFT CLICK - " + (kind == GuestKind.CheckID ? "ASK ID" : kind == GuestKind.Intoxicated ? "REJECT" : "Take order");
+                    owner.prompt = "LEFT CLICK - Talk to customer";
                     if (owner.PressedLeftClick()) OpenDialog();
                 }
                 return;
@@ -1807,18 +1867,42 @@ public class BeerGlassPour : MonoBehaviour
         }
         private void AcceptOrder()
         {
-            if (kind != GuestKind.Regular || state != State.Screening) return;
+            if (state != State.Screening) return;
+            if (kind != GuestKind.Regular)
+            {
+                DecisionError(kind == GuestKind.CheckID ? "This customer is under 18. Verify age and refuse alcohol service."
+                    : "This customer is intoxicated. Alcohol service should be refused.");
+                return;
+            }
             CloseDialog(); state = State.Preparing;
             SetCaption(orderNames[order]);
             owner.ShowAction("ORDER TAKEN", orderNames[order] + (order < 2 ? " - Fill and serve on the glowing marker." : " - Walk to the cocktail table."), 3f);
         }
-        private void RefuseService()
+        private void RefuseService(bool ageReason)
         {
-            if (state != State.Screening || (kind == GuestKind.CheckID && !idChecked) || kind == GuestKind.Regular) return;
+            if (state != State.Screening) return;
+            if (ageReason && !idChecked) { idChecked = true; return; }
+            bool correctReason = ageReason ? kind == GuestKind.CheckID : kind == GuestKind.Intoxicated;
+            if (!correctReason)
+            {
+                DecisionError(ageReason ? "The ID confirms legal age. Age is not a valid refusal reason for this customer."
+                    : "Intoxication was not the correct refusal reason for this customer.");
+                return;
+            }
             CloseDialog(); refusedCount++; order = -1; state = State.Leaving; atAisle = false;
             deadline = Time.unscaledTime + 2f;
-            SetCaption(kind == GuestKind.CheckID ? "UNDER 18 - NO SALE" : "SERVICE REFUSED");
-            owner.ShowAction("SALE REFUSED", kind == GuestKind.CheckID ? "ID checked: under 18. No alcohol served." : "Customer is intoxicated. No alcohol served.", 4f);
+            SetCaption("SERVICE REFUSED");
+            owner.ShowAction("SALE REFUSED", ageReason ? "ID checked: under 18. No alcohol served."
+                : "Customer is intoxicated. No alcohol served.", 4f);
+        }
+        private void DecisionError(string reason)
+        {
+            if (state != State.Screening) return;
+            CloseDialog(); missedCount++; order = -1; state = State.Leaving; atAisle = false;
+            deadline = Time.unscaledTime + 2f;
+            SetCaption("SERVICE DECISION FAILED");
+            if (owner.sounds != null) owner.sounds.PlayResult(false);
+            owner.ShowAction("SERVICE DECISION FAILED", reason, 4f);
         }
         public void CompleteCocktail(bool success)
         {
@@ -1896,7 +1980,7 @@ public class BeerGlassPour : MonoBehaviour
                 DrawTicket(new Rect(16f, 24f, 272f, 292f));
                 string message = state == State.Waiting ? "The bar is open. Customers arrive every few seconds."
                     : state == State.Arriving ? "A customer is approaching the counter."
-                    : state == State.Screening ? "Click the customer at the counter. Blue: ASK ID. Red: REJECT."
+                    : state == State.Screening ? "Observe the customer, then click to choose a service decision."
                     : HasCocktailOrder ? "Take the order to the rear cocktail table."
                     : HasBeerOrder ? "Pick up > Pour with E > Serve with LEFT CLICK"
                     : state == State.Receiving ? "The customer is receiving the drink." : "Customer leaving. Next arrival shortly.";
@@ -1916,19 +2000,17 @@ public class BeerGlassPour : MonoBehaviour
                 }
                 if (!dialogOpen) return;
                 Panel(new Rect(0f, 0f, width, height), new Color(0f, 0f, 0f, 0.78f));
-                Rect modal = new Rect((width - 620f) * 0.5f, (height - 360f) * 0.5f, 620f, 360f);
+                Rect modal = new Rect((width - 740f) * 0.5f, (height - 400f) * 0.5f, 740f, 400f);
                 Panel(modal, new Color(0.025f, 0.075f, 0.10f, 1f));
-                GUI.Label(new Rect(modal.x + 28f, modal.y + 25f, 564f, 45f), kind == GuestKind.CheckID ? "CHECK AGE BEFORE SERVICE"
-                    : kind == GuestKind.Intoxicated ? "INTOXICATED CUSTOMER" : "CUSTOMER ORDER", titleStyle);
-                string detail = kind == GuestKind.CheckID ? idChecked ? "ID CHECKED: UNDER 18\nDo not serve alcohol. Refuse the sale." : "This customer may be underage.\nAsk for ID before considering any sale."
-                    : kind == GuestKind.Intoxicated ? "This customer is visibly intoxicated.\nRefuse alcohol service." : "I'd like a " + orderNames[order] + ", please.";
-                GUI.Label(new Rect(modal.x + 28f, modal.y + 92f, 564f, 120f), detail, bodyStyle);
-                Rect primary = new Rect(modal.x + 28f, modal.yMax - 96f, 330f, 62f);
-                if (kind == GuestKind.Regular) { if (GUI.Button(primary, "TAKE ORDER", buttonStyle)) AcceptOrder(); }
-                else if (kind == GuestKind.CheckID && !idChecked)
-                { if (GUI.Button(primary, "ASK ID", buttonStyle)) { idChecked = true; SetCaption("ID: UNDER 18"); } }
-                else if (GUI.Button(primary, "REJECT / NO SALE", buttonStyle)) RefuseService();
-                if (GUI.Button(new Rect(modal.x + 378f, modal.yMax - 96f, 214f, 62f), "CLOSE [ESC]", buttonStyle)) CloseDialog();
+                GUI.Label(new Rect(modal.x + 28f, modal.y + 25f, 684f, 45f), "CUSTOMER / SERVICE DECISION", titleStyle);
+                string detail = "I'd like a " + orderNames[order] + ", please.";
+                if (idChecked) detail += kind == GuestKind.CheckID ? "\n\nID RESULT: UNDER 18" : "\n\nID RESULT: 18 OR OVER";
+                GUI.Label(new Rect(modal.x + 28f, modal.y + 92f, 684f, 115f), detail, bodyStyle);
+                float buttonY = modal.y + 226f;
+                if (GUI.Button(new Rect(modal.x + 28f, buttonY, 216f, 78f), "SELL / TAKE ORDER", buttonStyle)) { AcceptOrder(); return; }
+                if (GUI.Button(new Rect(modal.x + 262f, buttonY, 216f, 78f), idChecked ? "REFUSE / ID & AGE" : "ASK ID / AGE CHECK", buttonStyle)) { RefuseService(true); return; }
+                if (GUI.Button(new Rect(modal.x + 496f, buttonY, 216f, 78f), "REFUSE / INTOXICATION", buttonStyle)) { RefuseService(false); return; }
+                if (GUI.Button(new Rect(modal.x + 28f, modal.yMax - 68f, 684f, 44f), "CLOSE [ESC]", buttonStyle)) CloseDialog();
             }
             finally { GUI.matrix = saved; }
         }
@@ -1940,6 +2022,10 @@ public class BeerGlassPour : MonoBehaviour
             for (int i = 0; i < dimmedLights.Count; i++) if (dimmedLights[i] != null)
             { dimmedLights[i].intensity = lightIntensities[i]; dimmedLights[i].color = lightColors[i]; }
             RenderSettings.ambientMode = savedAmbientMode; RenderSettings.ambientLight = savedAmbient;
+            RenderSettings.ambientSkyColor = savedSkyColor; RenderSettings.ambientEquatorColor = savedEquatorColor; RenderSettings.ambientGroundColor = savedGroundColor;
+            RenderSettings.skybox = savedGlobalSkybox;
+            if (cameraSkybox != null) cameraSkybox.material = savedCameraSkybox;
+            if (nightSkybox != null) UnityEngine.Object.Destroy(nightSkybox);
             RenderSettings.ambientIntensity = savedAmbientIntensity; RenderSettings.reflectionIntensity = savedReflection;
             RenderSettings.fog = savedFog; RenderSettings.fogMode = savedFogMode; RenderSettings.fogColor = savedFogColor; RenderSettings.fogDensity = savedFogDensity;
             if (owner.playerCamera != null) { owner.playerCamera.clearFlags = savedClearFlags; owner.playerCamera.backgroundColor = savedBackground; }
