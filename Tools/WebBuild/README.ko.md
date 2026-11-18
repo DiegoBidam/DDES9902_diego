@@ -23,3 +23,13 @@ Unity에서 작업을 저장한 뒤 `Build Web on Mac.command`를 실행합니�
 `~/Library/Application Support/DDES9902WebBuild/실행날짜/`에 실제 `Unity-WebBuild.log`, 소스 버전, NUnit DLL 목록과 플레이어 어셈블리 목록이 남습니다. 실패하거나 비어 있는 폴더는 업로드용 ZIP으로 만들지 않습니다. 사본과 로그는 진단을 위해 보존합니다.
 
 이 도구의 작성/정적 검사와 실제 Mac Unity 빌드 성공은 별개입니다. `WEB BUILD SUCCEEDED`와 ZIP 경로가 나온 경우에만 빌드 완료입니다. 브라우저 플레이 검증은 생성된 빌드로 별도 확인해야 합니다.
+
+## 빌드는 성공했지만 ZIP 생성만 멈춘 경우
+
+`Unity-WebBuild.log`에 `A2_WEB_BUILD_SUCCEEDED`가 있고 필수 결과 파일이 남아 있다면 재빌드할 필요가 없습니다.
+
+```bash
+/bin/bash '/path/to/Build Web on Mac.command' --package-existing "$HOME/Library/Application Support/DDES9902WebBuild/실행날짜"
+```
+
+이 모드는 Unity 실행/캐시 사본 생성/코드 동기화를 건너뛰고, 기존 성공 로그·결과 요약·필수 Web 파일을 검증한 뒤 ZIP만 만듭니다. 기존 ZIP을 덮어쓰거나 병합하지 않도록 매번 새 이름을 사용합니다.

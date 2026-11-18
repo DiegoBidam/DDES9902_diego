@@ -5,6 +5,48 @@ if [ "$(uname -s)" != Darwin ]; then
     exit 1
 fi
 
+package_web_build() {
+    local run_directory=$1 desktop=${2:-"$HOME/Desktop"} built log manifest suffix destination zipfile stamp
+    local -a matches
+    run_directory=$(cd "$run_directory" && pwd -P)
+    built="$run_directory/Bartender_Web"
+    log="$run_directory/Unity-WebBuild.log"
+    manifest="$built/A2-build-result.txt"
+    if [ ! -s "$log" ] || ! /usr/bin/grep -Fxq "A2_WEB_BUILD_SUCCEEDED: $built" "$log" \
+        || [ ! -s "$manifest" ] || ! /usr/bin/grep -Fxq 'Result: Succeeded' "$manifest" \
+        || ! /usr/bin/grep -Fxq 'Errors: 0' "$manifest" || [ ! -s "$built/index.html" ]; then
+        echo '검증된 성공 빌드를 찾지 못해 압축하지 않았습니다. Unity-WebBuild.log를 확인하세요.'
+        return 1
+    fi
+    for suffix in .loader.js .wasm .data .framework.js; do
+        shopt -s nullglob
+        matches=("$built"/Build/*"$suffix")
+        shopt -u nullglob
+        if [ "${#matches[@]}" = 0 ] || [ ! -s "${matches[0]}" ]; then
+            echo "필수 Web 빌드 파일이 없어 압축하지 않았습니다: $suffix"
+            return 1
+        fi
+    done
+    mkdir -p "$desktop"
+    stamp=$(basename "$run_directory")
+    destination=$(mktemp -d "$desktop/Bartender_Web_Fixed-$stamp.XXXXXX")
+    zipfile="$destination.zip"
+    /usr/bin/ditto "$built" "$destination"
+    (cd "$destination" && /usr/bin/zip -qr "$zipfile" . -x '*.DS_Store' '__MACOSX/*')
+    /usr/bin/unzip -tq "$zipfile"
+    /usr/bin/unzip -Z1 "$zipfile" | /usr/bin/grep -Fx 'index.html' >/dev/null
+    echo 'WEB BUILD SUCCEEDED'
+    echo "업로드할 ZIP: $zipfile"
+    echo "실제 Unity 빌드 로그: $log"
+    /usr/bin/open -R "$zipfile"
+}
+
+if [ "${1:-}" = --package-existing ]; then
+    [ "$#" = 2 ] || { echo '사용법: --package-existing 성공한-빌드-실행폴더'; exit 1; }
+    package_web_build "$2"
+    exit 0
+fi
+
 project=${1:-}
 if [ -z "$project" ]; then
     candidates=$(/bin/ps -ww -axo args= | /usr/bin/awk '
@@ -108,14 +150,12 @@ printf 'Source revision: %s\nOriginal project: %s\nUnity: %s\n' "$revision" "$pr
 # 전역 Bee 캐시도 이 빌드 전용 경로로 분리합니다.
 export BEE_CACHE_DIRECTORY="$run/BeeCache"
 echo "Unity $version 로 Web 빌드를 시작합니다. 완료될 때까지 이 터미널을 열어 두세요."
-echo "ログ: $log"
+echo "로그: $log"
 set +e
 "$unity" -batchmode -nographics -quit -projectPath "$staging" -buildTarget WebGL \
     -executeMethod BartenderWebBuild.Build -a2WebOutput "$output" -logFile "$log"
 result=$?
 set -e
-cleanup_log_tail
-trap - EXIT
 if [ "$result" != 0 ] || ! /usr/bin/grep -q 'A2_WEB_BUILD_SUCCEEDED:' "$log" \
     || [ ! -s "$output/index.html" ] || [ ! -s "$output/A2-build-result.txt" ]; then
     echo 'Web 빌드가 완료되지 않았습니다. 빈 폴더를 업로드하지 마세요.'
@@ -125,14 +165,5 @@ if [ "$result" != 0 ] || ! /usr/bin/grep -q 'A2_WEB_BUILD_SUCCEEDED:' "$log" \
     exit 1
 fi
 
-# 성공한 빌드만 바탕화면에 복사하고, ZIP 루트에 index.html이 오도록 압축합니다.
-destination="$HOME/Desktop/Bartender_Web_Fixed-$stamp"
-zipfile="$destination.zip"
-/usr/bin/ditto "$output" "$destination"
-(cd "$destination" && /usr/bin/zip -qr "$zipfile" . -x '*.DS_Store' '__MACOSX/*')
-/usr/bin/unzip -tq "$zipfile"
-/usr/bin/unzip -Z1 "$zipfile" | /usr/bin/grep -qx 'index.html'
-echo 'WEB BUILD SUCCEEDED'
-echo "업로드할 ZIP: $zipfile"
-echo "실제 Unity 빌드 로그: $log"
-/usr/bin/open -R "$zipfile"
+# 성공 검증/압축은 재개 모드와 같은 경로를 사용합니다.
+package_web_build "$run"
