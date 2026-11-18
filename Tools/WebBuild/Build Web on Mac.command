@@ -35,10 +35,22 @@ if [ ! -x "$unity" ]; then
     echo '설치하거나 버전을 자동으로 바꾸지 않았습니다.'
     exit 1
 fi
-contents=$(dirname "$(dirname "$unity")")
-if [ ! -d "$contents/PlaybackEngines/WebGLSupport" ]; then
-    echo "현재 Unity $version 에 Web Build Support가 없습니다. 자동 설치는 하지 않습니다."
-    exit 1
+find_webgl_support() {
+    local executable=$1 contents_root editor_root candidate
+    contents_root=$(dirname "$(dirname "$executable")")
+    editor_root=$(dirname "$(dirname "$contents_root")")
+    # Hub는 Unity.app 옆에 모듈을 설치합니다. 앱 내부 배치도 함께 지원합니다.
+    for candidate in "$editor_root/PlaybackEngines/WebGLSupport" "$contents_root/PlaybackEngines/WebGLSupport"; do
+        if [ -d "$candidate" ]; then printf '%s\n' "$candidate"; return 0; fi
+    done
+    return 1
+}
+webgl_support=$(find_webgl_support "$unity" || true)
+if [ -n "$webgl_support" ]; then
+    echo "Web Build Support 경로: $webgl_support"
+else
+    # 폴더 배치만으로 미설치라고 단정하지 않습니다. 최종 판단은 설치된 Unity가 수행합니다.
+    echo '표준 경로에서 Web 모듈 폴더를 찾지 못했습니다. 기존 Unity의 실제 Web 지원 여부를 확인하며 진행합니다.'
 fi
 
 base="$HOME/Library/Application Support/DDES9902WebBuild"

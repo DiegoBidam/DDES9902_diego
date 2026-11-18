@@ -13,6 +13,7 @@ Unity에서 작업을 저장한 뒤 `Build Web on Mac.command`를 실행합니�
 - 원본 Assets / Packages / ProjectSettings를 별도 빌드 사본으로 복사합니다. 원본의 씬, 프리팹, .meta, 코드, 패키지와 Library는 수정하거나 삭제하지 않습니다.
 - 알려진 이전 코드 버전만 빌드 사본에서 최신 main 코드로 갱신합니다. 별도 로컬 코드 편집을 발견하면 덮어쓰지 않고 중단합니다.
 - 기존 Library, TypeDB, Bee, PackageCache를 복사하지 않습니다. 빌드 전용 Bee 경로와 `CleanBuildCache` 옵션으로 타입 캐시 충돌을 배제합니다. NUnit 또는 테스트 패키지를 제거하지 않습니다.
+- Web 모듈은 Hub의 `Unity.app` 옆 경로와 앱 내부 경로를 모두 확인합니다. 폴더 탐색만으로 미설치라고 단정하지 않고 설치된 Unity의 API/빌드 로그로 최종 확인합니다.
 - `How to be a bartender` 씬 하나를 Web 릴리즈로 빌드합니다. 테스트 어셈블리 포함 옵션은 사용하지 않습니다. 압축은 이 빌드 사본에서 Disabled로 설정합니다.
 - Unity 종료 코드, BuildReport, 오류 수, index.html / loader / wasm / data / framework 파일을 확인합니다.
 - 성공한 경우에만 바탕화면에 `Bartender_Web_Fixed-날짜.zip`을 만들고 ZIP 무결성과 루트의 index.html을 검사합니다.
