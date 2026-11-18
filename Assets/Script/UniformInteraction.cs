@@ -508,12 +508,15 @@ public class UniformInteraction : MonoBehaviour
             textStyle.normal.textColor = Color.white;
         }
 
-        string status =
-            "Shirt: " + (ShirtWorn ? "ON" : "--") +
-            "    Apron: " + (ApronWorn ? "ON" : "--");
-
-        GUI.Box(new Rect(15, 15, 320, 45), "");
-        GUI.Label(new Rect(15, 15, 320, 45), status, textStyle);
+        // 출근해 다음 스테이지로 이동한 뒤에는 착용 상태 HUD를 반복해서 표시하지 않습니다.
+        if (!shiftStarted)
+        {
+            string status =
+                "Shirt: " + (ShirtWorn ? "ON" : "--") +
+                "    Apron: " + (ApronWorn ? "ON" : "--");
+            GUI.Box(new Rect(15, 15, 320, 45), "");
+            GUI.Label(new Rect(15, 15, 320, 45), status, textStyle);
+        }
         DrawStepConfirmation();
 
         if (showingShiftMessage)

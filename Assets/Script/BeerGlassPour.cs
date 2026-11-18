@@ -992,7 +992,7 @@ public class BeerGlassPour : MonoBehaviour
         night = new NightService(this);
         // OPEN 클릭은 메뉴를 닫고 즉시 일인칭 마우스 시점으로 돌아갑니다. 전환용 입력 잠금은 없습니다.
         Cursor.lockState = CursorLockMode.Locked; Cursor.visible = false;
-        ShowAction("BAR OPEN / NIGHT SERVICE", "Customers will arrive shortly. Observe each guest and choose how to respond.", 4f);
+        ShowAction("LEVEL 1 / Week day (easy)", "Handle 10 customers. Follow the quick notes for ID checks and alcohol refusals.", 4f);
     }
 
     void DrawTrialChecks(Rect area, int recipe, GUIStyle labelStyle)
@@ -1532,7 +1532,7 @@ public class BeerGlassPour : MonoBehaviour
     private sealed class NightService
     {
         private enum GuestKind { Regular, CheckID, Intoxicated }
-        private enum State { Waiting, Arriving, Screening, Preparing, Receiving, Leaving }
+        private enum State { Waiting, Arriving, Screening, Preparing, Receiving, Leaving, Completed }
         private readonly BeerGlassPour owner;
         private readonly GameObject root;
         private GameObject guest, receivedDrink;
@@ -1540,12 +1540,15 @@ public class BeerGlassPour : MonoBehaviour
         private TextMesh guestCaption;
         private State state;
         private GuestKind kind;
+        private const int CustomerLimit = 10;
+        private int completedGuests;
         private int order = -1, guestNumber, servedCount, refusedCount, missedCount, encounterIndex;
         private readonly int[] encounters = { 0, 1, 2, 3, 4 }; // 두 맥주/칵테일/ID/취객을 매 묶음에 모두 포함합니다.
         private readonly string[] orderNames = { "Schooner beer", "Pint beer", "Gin & Tonic", "Negroni", "Long Island Iced Tea" };
         private float deadline;
         private Vector3 entrance, aisle, counter, drinkStart;
         private bool atAisle, dialogOpen, idChecked, disposed;
+        private bool easyGuideVisible, customerInspected, guideRefusalComplete;
         private CursorLockMode dialogLock;
         private bool dialogCursor;
         private readonly System.Collections.Generic.List<Material> materials = new System.Collections.Generic.List<Material>();
@@ -1703,11 +1706,13 @@ public class BeerGlassPour : MonoBehaviour
         }
         private void SpawnGuest()
         {
+            if (guestNumber >= CustomerLimit) return;
             if (encounterIndex >= encounters.Length) ShuffleEncounters();
             int encounter = encounters[encounterIndex++];
             kind = encounter == 3 ? GuestKind.CheckID : encounter == 4 ? GuestKind.Intoxicated : GuestKind.Regular;
             order = kind != GuestKind.Regular ? Random.Range(0, 5) : encounter == 2 ? Random.Range(2, 5) : encounter;
             guestNumber++; idChecked = false; atAisle = false;
+            easyGuideVisible = false; customerInspected = false; guideRefusalComplete = false;
             guest = new GameObject("Customer_" + guestNumber); guest.transform.SetParent(root.transform, false); guest.transform.position = entrance;
             shirt.color = Color.HSVToRGB(Random.value, 0.45f, 0.75f);
             bool younger = kind == GuestKind.CheckID;
@@ -1769,6 +1774,7 @@ public class BeerGlassPour : MonoBehaviour
         private void OpenDialog()
         {
             dialogLock = Cursor.lockState; dialogCursor = Cursor.visible; dialogOpen = true;
+            customerInspected = true;
             Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
         }
         private void CloseDialog()
@@ -1788,6 +1794,7 @@ public class BeerGlassPour : MonoBehaviour
                 if (away.sqrMagnitude > 0.001f) guestCaption.transform.rotation = Quaternion.LookRotation(away);
             }
             if (dialogOpen) { if (owner.PressedRecipeClose()) CloseDialog(); return; }
+            if (state == State.Completed) return;
             if (state == State.Waiting) { if (Time.unscaledTime >= deadline) SpawnGuest(); return; }
             if (state == State.Arriving)
             {
@@ -1797,6 +1804,7 @@ public class BeerGlassPour : MonoBehaviour
                     guest.transform.rotation = Quaternion.identity;
                     leftArm.localRotation = rightArm.localRotation = leftLeg.localRotation = rightLeg.localRotation = Quaternion.identity;
                     state = State.Screening;
+                    easyGuideVisible = kind != GuestKind.Regular;
                     owner.ShowAction("CUSTOMER ARRIVED", "Approach the bar and click the customer to respond.", 3f);
                 }
                 return;
@@ -1823,8 +1831,18 @@ public class BeerGlassPour : MonoBehaviour
                 {
                     UnityEngine.Object.Destroy(guest); guest = null; guestCaption = null;
                     if (receivedDrink != null) UnityEngine.Object.Destroy(receivedDrink);
-                    owner.ResetServiceGlasses(); order = -1; state = State.Waiting;
-                    deadline = Time.unscaledTime + Random.Range(6f, 11f);
+                    owner.ResetServiceGlasses(); order = -1; easyGuideVisible = false;
+                    completedGuests++;
+                    if (completedGuests >= CustomerLimit)
+                    {
+                        state = State.Completed;
+                        owner.ShowAction("LEVEL 1 COMPLETE", "Week day (easy): all 10 customers handled.", 5f);
+                    }
+                    else
+                    {
+                        state = State.Waiting;
+                        deadline = Time.unscaledTime + Random.Range(6f, 11f);
+                    }
                 }
                 return;
             }
@@ -1889,6 +1907,7 @@ public class BeerGlassPour : MonoBehaviour
                     : "Intoxication was not the correct refusal reason for this customer.");
                 return;
             }
+            guideRefusalComplete = true;
             CloseDialog(); refusedCount++; order = -1; state = State.Leaving; atAisle = false;
             deadline = Time.unscaledTime + 2f;
             SetCaption("SERVICE REFUSED");
@@ -1966,6 +1985,44 @@ public class BeerGlassPour : MonoBehaviour
                 ? "Pick up the correct glass.\nE at the tap to pour.\nLEFT CLICK the glowing serving spot."
                 : "Cocktail table\n45 seconds / ONE attempt\nMake the ordered drink, then press SERVE.", smallStyle);
         }
+        // 화면 좌표로 그리는 안내이므로 고개를 돌려도 함께 따라옵니다. 커서/이동/시점은 변경하지 않습니다.
+        private void DrawEasyGuide()
+        {
+            if (!easyGuideVisible) return;
+            Rect note = new Rect(16f, 24f, 272f, 356f);
+            Panel(note, new Color(0.025f, 0.10f, 0.12f, 0.98f));
+            Panel(new Rect(note.x, note.y, note.width, 4f), new Color(0.62f, 0.91f, 0.72f));
+            GUI.Label(new Rect(note.x + 18f, note.y + 16f, 236f, 25f), "EASY MODE / QUICK NOTE", smallStyle);
+            bool ageCheck = kind == GuestKind.CheckID;
+            GUI.Label(new Rect(note.x + 18f, note.y + 52f, 236f, 34f), ageCheck ? "AGE CHECK" : "FIT TO SERVE?", titleStyle);
+            GUI.Label(new Rect(note.x + 18f, note.y + 103f, 236f, 106f), ageCheck
+                ? "This customer looks young. Check their ID before selling alcohol."
+                : "This customer appears intoxicated. Consider whether alcohol should be sold.", bodyStyle);
+            DrawGuideCheck(new Rect(note.x + 18f, note.y + 221f, 236f, 48f), ageCheck ? idChecked : customerInspected,
+                ageCheck ? "Check the customer's ID" : "Assess signs of intoxication");
+            DrawGuideCheck(new Rect(note.x + 18f, note.y + 281f, 236f, 48f), guideRefusalComplete,
+                ageCheck ? "Refuse alcohol if under 18" : "Refuse alcohol service");
+        }
+        private void DrawGuideCheck(Rect row, bool complete, string instruction)
+        {
+            Rect box = new Rect(row.x, row.y + 5f, 22f, 22f);
+            Panel(box, complete ? new Color(0.18f, 0.55f, 0.36f) : new Color(0.14f, 0.22f, 0.24f));
+            if (complete)
+            {
+                owner.DrawCheckStroke(new Vector2(box.x + 4f, box.y + 11f), new Vector2(box.x + 9f, box.y + 16f));
+                owner.DrawCheckStroke(new Vector2(box.x + 9f, box.y + 16f), new Vector2(box.x + 18f, box.y + 6f));
+            }
+            GUI.Label(new Rect(row.x + 34f, row.y, row.width - 34f, row.height), instruction, smallStyle);
+        }
+        private void DrawLevelComplete(float width)
+        {
+            Rect area = new Rect((width - 600f) * 0.5f, 195f, 600f, 178f);
+            Panel(area, new Color(0.025f, 0.10f, 0.12f, 0.97f));
+            Panel(new Rect(area.x, area.y, area.width, 4f), new Color(0.62f, 0.91f, 0.72f));
+            GUI.Label(new Rect(area.x + 24f, area.y + 22f, 552f, 38f), "LEVEL 1 COMPLETE", titleStyle);
+            GUI.Label(new Rect(area.x + 24f, area.y + 73f, 552f, 36f), "Week day (easy) - All 10 customers handled.", bodyStyle);
+            GUI.Label(new Rect(area.x + 24f, area.y + 124f, 552f, 32f), "Served " + servedCount + "   Refused " + refusedCount + "   Missed " + missedCount, smallStyle);
+        }
         public void Draw()
         {
             EnsureStyles();
@@ -1974,9 +2031,12 @@ public class BeerGlassPour : MonoBehaviour
             float width = Screen.width / scale, height = Screen.height / scale;
             try
             {
-                Panel(new Rect(width - 338f, 16f, 322f, 105f), new Color(0.025f, 0.06f, 0.1f, 0.94f));
-                GUI.Label(new Rect(width - 320f, 27f, 290f, 34f), "NIGHT SERVICE / OPEN", titleStyle);
-                GUI.Label(new Rect(width - 320f, 70f, 290f, 45f), "Served " + servedCount + "   Refused " + refusedCount + "   Missed " + missedCount, smallStyle);
+                Panel(new Rect(width - 338f, 16f, 322f, 156f), new Color(0.025f, 0.06f, 0.1f, 0.94f));
+                GUI.Label(new Rect(width - 320f, 26f, 290f, 24f), "LEVEL 1 / NIGHT SERVICE", smallStyle);
+                GUI.Label(new Rect(width - 320f, 57f, 290f, 36f), "Week day (easy)", titleStyle);
+                GUI.Label(new Rect(width - 320f, 104f, 290f, 24f), "Customers: " + completedGuests + " / " + CustomerLimit, smallStyle);
+                GUI.Label(new Rect(width - 320f, 138f, 290f, 24f), "Served " + servedCount + "   Refused " + refusedCount + "   Missed " + missedCount, smallStyle);
+                if (state == State.Completed) { DrawLevelComplete(width); return; }
                 DrawTicket(new Rect(16f, 24f, 272f, 292f));
                 string message = state == State.Waiting ? "The bar is open. Customers arrive every few seconds."
                     : state == State.Arriving ? "A customer is approaching the counter."
@@ -1998,9 +2058,11 @@ public class BeerGlassPour : MonoBehaviour
                         Panel(tag, new Color(0.02f, 0.17f, 0.16f, 0.94f)); GUI.Label(tag, "SERVE HERE\nLEFT CLICK", bodyStyle);
                     }
                 }
-                if (!dialogOpen) return;
+                if (!dialogOpen) { DrawEasyGuide(); return; }
                 Panel(new Rect(0f, 0f, width, height), new Color(0f, 0f, 0f, 0.78f));
-                Rect modal = new Rect((width - 740f) * 0.5f, (height - 400f) * 0.5f, 740f, 400f);
+                DrawEasyGuide();
+                float modalX = easyGuideVisible ? Mathf.Max(304f, (width - 740f) * 0.5f) : (width - 740f) * 0.5f;
+                Rect modal = new Rect(modalX, (height - 400f) * 0.5f, 740f, 400f);
                 Panel(modal, new Color(0.025f, 0.075f, 0.10f, 1f));
                 GUI.Label(new Rect(modal.x + 28f, modal.y + 25f, 684f, 45f), "CUSTOMER / SERVICE DECISION", titleStyle);
                 string detail = "I'd like a " + orderNames[order] + ", please.";
