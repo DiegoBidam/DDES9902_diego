@@ -64,8 +64,8 @@ public class BeerGlassPour : MonoBehaviour
     private NightService night;
     private readonly GlassHome[] glassHomes = new GlassHome[2];
     private bool AllTrialsComplete => passedTrials[0] >= 3 && passedTrials[1] >= 3 && passedTrials[2] >= 3;
-    public bool IsRecipeOpen => barOpened ? night != null && night.IsDialogOpen
-        : practiceReturnFrame == Time.frameCount || (recipeCards != null && recipeCards.BlocksInput);
+    public bool IsRecipeOpen => practiceReturnFrame == Time.frameCount
+        || (barOpened ? night != null && night.IsDialogOpen : recipeCards != null && recipeCards.BlocksInput);
     private readonly LineRenderer[] serviceRings = new LineRenderer[2];
     private Material markerMaterial;
     private Material completedMaterial;
@@ -76,12 +76,10 @@ public class BeerGlassPour : MonoBehaviour
     public bool TaskCompleted => served[0] && served[1];
 
     private string prompt = "";
-    private GUIStyle textStyle;
+
     private string actionTitle = "";
     private string actionDetail = "";
     private float actionUntil;
-    private GUIStyle actionTitleStyle;
-    private GUIStyle actionDetailStyle;
 
     void Start()
     {
@@ -223,6 +221,7 @@ public class BeerGlassPour : MonoBehaviour
 
     void LateUpdate()
     {
+        DrawWorldUI();
         if (stationBeacon == null) return;
         if (uniform == null || !uniform.ShiftStarted
             || (barOpened && (night == null || (!night.HasBeerOrder && !night.HasCocktailOrder)))
@@ -777,6 +776,14 @@ public class BeerGlassPour : MonoBehaviour
 
     void OnDisable()
     {
+        if (beerBoard != null) beerBoard.Hide();
+        if (cocktailBoard != null) cocktailBoard.Hide();
+        if (serveBoard != null) serveBoard.Hide();
+        if (night != null) night.HideUI();
+        if (cocktailEquipment != null) cocktailEquipment.HideUI();
+        if (recipeCards != null) recipeCards.HideUI();
+        if (practice != null) practice.HideUI();
+        worldAim.Hide();
         if (stationBeacon != null) stationBeacon.Hide();
         if (night != null) night.Suspend();
         CancelBeerGuide();
@@ -795,6 +802,10 @@ public class BeerGlassPour : MonoBehaviour
 
     void OnDestroy()
     {
+        if (beerBoard != null) beerBoard.Dispose();
+        if (cocktailBoard != null) cocktailBoard.Dispose();
+        if (serveBoard != null) serveBoard.Dispose();
+        worldAim.Dispose();
         if (stationBeacon != null) stationBeacon.Dispose();
         CancelBeerGuide();
         if (beerGuidance != null) beerGuidance.Dispose();
@@ -844,111 +855,68 @@ public class BeerGlassPour : MonoBehaviour
 #endif
     }
 
-    void OnGUI()
+    private WorldPanel beerBoard, cocktailBoard, serveBoard;
+    private readonly WorldAim worldAim = new WorldAim();
+
+    private void DrawWorldUI()
     {
         if (practice != null && practice.IsActive)
         {
-            practice.Draw();
-            return;
+            if (beerBoard != null) beerBoard.Hide();
+            if (cocktailBoard != null) cocktailBoard.Hide();
+            if (serveBoard != null) serveBoard.Hide();
+            if (night != null) night.HideUI();
+            practice.Draw(); worldAim.Tick(practice.ViewCamera); return;
         }
-        if (uniform == null || !uniform.ShiftCompleted)
-            return;
-
+        worldAim.Tick(playerCamera);
+        DrawServingPlacard(uniform != null && uniform.ShiftStarted && (!barOpened ? !TaskCompleted : night != null && night.HasBeerOrder));
+        if (uniform == null || !uniform.ShiftStarted) return;
         if (barOpened && night != null)
         {
-            night.Draw();
-            InteractionPromptUI.Draw(prompt);
-            DrawActionFeedback();
-            return;
+            if (beerBoard != null) beerBoard.Hide();
+            if (cocktailBoard != null) cocktailBoard.Hide();
+            night.Draw(); return;
         }
-
-        if (recipeCards != null && recipeCards.IsOpen)
+        if (beerBoard == null) beerBoard = new WorldPanel(gameObject, "BeerStation_InstructionBoard", 760f, 380f, 0.0018f);
+        Vector3 beerPosition = beerNozzle != null ? beerNozzle.position + new Vector3(-1.3f, 0.65f, 0f)
+            : serviceDesk != null ? serviceDesk.bounds.center + Vector3.up * 1.7f : new Vector3(42.7f, 2.25f, 1.8f);
+        beerBoard.Pose(beerPosition, playerCamera); beerBoard.Begin();
+        beerBoard.Text(new Rect(24f, 19f, 712f, 45f), "BEER STATION", 35, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+        beerBoard.Check(new Rect(24f, 80f, 350f, 42f), "Schooner served", served[0]);
+        beerBoard.Check(new Rect(395f, 80f, 340f, 42f), "Pint served", served[1]);
+        string guideHeading = pendingBeerInstruction == 0 ? "SCHOONER FIRST" : pendingBeerInstruction == 1 ? "WRONG GLASS"
+            : pendingBeerInstruction == 2 ? "NEXT: PINT" : "COCKTAIL STATION";
+        string instruction = uniform.IsGuidePlaying ? uniform.GuideMessage + "\nYou can move. Interact after the guide ends."
+            : IsGuidePlaying ? guideHeading + ". Listen to the guide. You can keep moving."
+            : TaskCompleted ? "Beer task complete. Walk around the bar to the cocktail recipe table."
+            : !beerIntroStarted ? "Come to the tap to hear your first instruction."
+            : pouring ? "Pouring beer..."
+            : heldGlass == null ? "Pick up the " + (ExpectedBeerGlass == 0 ? "schooner" : "pint") + " glass with LEFT CLICK."
+            : !filled[HeldGlassIndex()] ? "Aim at the beer tap and press E to pour." : "Place the filled glass on the glowing serving spot with LEFT CLICK.";
+        beerBoard.Text(new Rect(24f, 142f, 712f, 100f), instruction, 28);
+        string detail = Time.unscaledTime < actionUntil ? actionTitle + "\n" + actionDetail : prompt;
+        beerBoard.Text(new Rect(24f, 257f, 712f, 102f), detail, 24, WorldPanel.Accent); beerBoard.End();
+        if (TaskCompleted && recipeCards != null && recipeCards.TryGetFocusPoint(out Vector3 focus))
         {
-            recipeCards.DrawOverlay();
-            return;
-        }
-
-        if (textStyle == null)
-        {
-            textStyle = new GUIStyle(GUI.skin.label);
-            textStyle.fontSize = 20;
-            textStyle.alignment = TextAnchor.MiddleCenter;
-            textStyle.wordWrap = true;
-            textStyle.normal.textColor = Color.white;
-        }
-
-        if (IsGuidePlaying)
-        {
-            string heading = pendingBeerInstruction == 0 ? "SCHOONER FIRST" : pendingBeerInstruction == 1
-                ? "WRONG GLASS" : pendingBeerInstruction == 2 ? "NEXT: PINT" : "COCKTAIL STATION";
-            float width = Mathf.Min(640f, Screen.width - 32f);
-            Rect guidePanel = new Rect((Screen.width - width) * 0.5f, Screen.height * 0.5f - 70f, width, 140f);
-            GUI.Box(guidePanel, "");
-            GUI.Label(guidePanel, heading + "\nListen to the guide...\nYou can move. Interact after the guide ends.", textStyle);
-            return;
-        }
-
-        int count = (served[0] ? 1 : 0) + (served[1] ? 1 : 0);
-        Rect taskArea = new Rect(Mathf.Max(15f, Screen.width - 405f), 15f, 390f, 105f);
-        GUI.Box(taskArea, "");
-        GUI.Label(taskArea, barOpened ? "BAR OPEN\nAll training trials complete." : TaskCompleted
-            ? "TASK COMPLETE!\nBoth beers served."
-            : "SERVE TWO BEERS  " + count + "/2\nSchooner: " + GlassStatus(0) + "   Pint: " + GlassStatus(1), textStyle);
-
-        string instruction;
-        if (barOpened)
-            instruction = "Training complete. The bar is open.";
-        else if (cocktailEquipment != null && cocktailEquipment.IsHolding)
-            instruction = "COCKTAIL TOOLS: " + cocktailEquipment.HeldName + "\nLEFT CLICK to put it back on the table";
-        else if (TaskCompleted && !cocktailBriefingCompleted)
-            instruction = "Both beers served. Walk around the bar to the rear cocktail table for your briefing.";
-        else if (TaskCompleted)
-            instruction = "BEER TASK COMPLETE! Choose a recipe card on the cocktail table.";
-        else if (pouring)
-            instruction = "2. POURING BEER...";
-        else if (!beerIntroStarted)
-            instruction = "Walk to the beer tap. Your first instruction plays when you arrive.";
-        else if (heldGlass == null)
-            instruction = "1. Pick up the " + (ExpectedBeerGlass == 0 ? "schooner" : "pint") + " with LEFT CLICK";
-        else if (!filled[HeldGlassIndex()])
-            instruction = "2. Aim at the beer tap and press E to fill the glass";
-        else
-            instruction = "3. BEER READY! Aim at the glowing SERVE spot and LEFT CLICK to place";
-
-        float panelWidth = Mathf.Min(650f, Screen.width - 30f);
-        Rect instructionArea = new Rect((Screen.width - panelWidth) * 0.5f, 130f, panelWidth, 85f);
-        GUI.Box(instructionArea, "");
-        bool cocktailFocus = TaskCompleted || (cocktailEquipment != null && cocktailEquipment.IsHolding);
-        GUI.Label(instructionArea, (cocktailFocus ? "COCKTAIL STATION\n" : "PICK UP > POUR > SERVE\n") + instruction, textStyle);
-        if (cocktailEquipment != null) cocktailEquipment.DrawLabels(textStyle);
-
-        if (serviceMarker != null && serviceMarker.activeInHierarchy)
-        {
-            Vector3 screen = playerCamera.WorldToScreenPoint(serviceMarker.transform.position + Vector3.up * 0.5f);
-            bool readyToServe = heldGlass != null && filled[HeldGlassIndex()] && !pouring;
-            bool onScreen = screen.z > 0f && screen.x >= 0f && screen.x <= Screen.width
-                && screen.y >= 0f && screen.y <= Screen.height;
-            if (onScreen || readyToServe)
+            if (cocktailBoard == null) cocktailBoard = new WorldPanel(gameObject, "CocktailTable_TrainingRecord", 650f, 440f, 0.0018f);
+            cocktailBoard.Pose(new Vector3(focus.x + 2f, 2.20f, focus.z + 0.48f), playerCamera);
+            cocktailBoard.Begin();
+            cocktailBoard.Text(new Rect(20f, 16f, 610f, 42f), "COCKTAIL TRAINING", 31, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+            for (int recipe = 0; recipe < 3; recipe++)
             {
-                if (screen.z < 0f)
-                {
-                    screen.x = Screen.width - screen.x;
-                    screen.y = Screen.height - screen.y;
-                }
-                float labelX = Mathf.Clamp(screen.x - 150f, 5f, Mathf.Max(5f, Screen.width - 305f));
-                float labelY = Mathf.Clamp(Screen.height - screen.y - 25f, 225f,
-                    Mathf.Max(225f, Screen.height - 90f));
-                Rect markerArea = new Rect(labelX, labelY, 300f, 65f);
-                GUI.Box(markerArea, "");
-                GUI.Label(markerArea, TaskCompleted ? "SERVING COMPLETE"
-                    : !onScreen ? "TURN TOWARD SERVE"
-                    : readyToServe ? "SERVE HERE\nAim here + LEFT CLICK"
-                    : "SERVE HERE  " + count + "/2", textStyle);
+                string[] names = { "Gin & Tonic", "Negroni", "Long Island Iced Tea" };
+                cocktailBoard.Text(new Rect(20f, 72f + recipe * 43f, 310f, 36f), names[recipe], 23);
+                for (int round = 0; round < 3; round++)
+                    cocktailBoard.Check(new Rect(340f + round * 95f, 72f + recipe * 43f, 95f, 36f), (round + 1).ToString(), passedTrials[recipe] > round);
             }
+            cocktailBoard.Text(new Rect(20f, 213f, 610f, 86f), cocktailEquipment != null && cocktailEquipment.IsHolding
+                ? "LEFT CLICK to return " + cocktailEquipment.HeldName : cocktailBriefingCompleted ? "Read a recipe card. Aim + LEFT CLICK." : "Listen to the cocktail station briefing.", 26);
+            cocktailBoard.Text(new Rect(20f, 318f, 610f, 106f), Time.unscaledTime < actionUntil ? actionTitle + "\n" + actionDetail : prompt, 25, WorldPanel.Accent);
+            cocktailBoard.End();
         }
-
-        InteractionPromptUI.Draw(prompt);
-        DrawActionFeedback();
+        else if (cocktailBoard != null) cocktailBoard.Hide();
+        if (cocktailEquipment != null) cocktailEquipment.DrawLabels();
+        if (recipeCards != null) recipeCards.DrawOverlay();
     }
 
     void ShowAction(string title, string detail, float duration = 2.2f)
@@ -956,25 +924,15 @@ public class BeerGlassPour : MonoBehaviour
         actionTitle = title; actionDetail = detail; actionUntil = Time.unscaledTime + duration;
     }
 
-    void DrawActionFeedback()
+    private void DrawServingPlacard(bool show)
     {
-        if (Time.unscaledTime >= actionUntil) return;
-        if (actionTitleStyle == null)
+        if (serviceMarker != null && show)
         {
-            actionTitleStyle = new GUIStyle(GUI.skin.label) { fontSize = 24, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleLeft, padding = new RectOffset(0, 0, 0, 0) };
-            actionTitleStyle.normal.textColor = new Color(0.8f, 1f, 0.88f);
-            actionDetailStyle = new GUIStyle(GUI.skin.label) { fontSize = 17, wordWrap = true, alignment = TextAnchor.UpperLeft, padding = new RectOffset(0, 0, 0, 0) };
-            actionDetailStyle.normal.textColor = Color.white;
+            if (serveBoard == null) serveBoard = new WorldPanel(gameObject, "BeerService_Placard", 420f, 116f, 0.0014f);
+            serveBoard.Pose(serviceMarker.transform.position + Vector3.up * 0.30f, playerCamera); serveBoard.Begin();
+            serveBoard.Text(new Rect(12f, 12f, 396f, 92f), "SERVE HERE\nPlace filled beer: LEFT CLICK", 26, WorldPanel.Ink, TextAnchor.MiddleCenter, true); serveBoard.End();
         }
-        float width = Mathf.Min(640f, Screen.width - 32f);
-        // 커진 조준 안내와 분리해 완료 피드백은 화면 아래쪽에 표시합니다.
-        Rect panel = new Rect((Screen.width - width) * 0.5f, Screen.height - 116f, width, 88f);
-        Color old = GUI.color;
-        GUI.color = new Color(0.025f, 0.13f, 0.11f, 0.96f); GUI.DrawTexture(panel, Texture2D.whiteTexture);
-        GUI.color = new Color(0.4f, 0.9f, 0.6f); GUI.DrawTexture(new Rect(panel.x, panel.y, 5f, panel.height), Texture2D.whiteTexture);
-        GUI.color = old;
-        GUI.Label(new Rect(panel.x + 18f, panel.y + 7f, width - 36f, 33f), actionTitle, actionTitleStyle);
-        GUI.Label(new Rect(panel.x + 18f, panel.y + 43f, width - 36f, 40f), actionDetail, actionDetailStyle);
+        else if (serveBoard != null) serveBoard.Hide();
     }
 
     void OpenBar()
@@ -993,36 +951,6 @@ public class BeerGlassPour : MonoBehaviour
         // OPEN 클릭은 메뉴를 닫고 즉시 일인칭 마우스 시점으로 돌아갑니다. 전환용 입력 잠금은 없습니다.
         Cursor.lockState = CursorLockMode.Locked; Cursor.visible = false;
         ShowAction("LEVEL 1 / Week day (easy)", "Handle 10 customers. Follow the quick notes for ID checks and alcohol refusals.", 4f);
-    }
-
-    void DrawTrialChecks(Rect area, int recipe, GUIStyle labelStyle)
-    {
-        float cell = area.width / 3f;
-        for (int index = 0; index < 3; index++)
-        {
-            bool done = passedTrials[recipe] > index;
-            Rect box = new Rect(area.x + index * cell + 3f, area.y + 5f, 22f, 22f);
-            Color old = GUI.color;
-            GUI.color = done ? new Color(0.22f, 0.55f, 0.36f) : new Color(0.5f, 0.58f, 0.53f, 0.35f);
-            GUI.DrawTexture(box, Texture2D.whiteTexture); GUI.color = old;
-            if (done)
-            {
-                DrawCheckStroke(new Vector2(box.x + 4f, box.y + 11f), new Vector2(box.x + 9f, box.y + 16f));
-                DrawCheckStroke(new Vector2(box.x + 9f, box.y + 16f), new Vector2(box.x + 18f, box.y + 6f));
-            }
-            GUI.Label(new Rect(box.x + 30f, area.y + 3f, cell - 35f, 26f), "Trial " + (index + 1), labelStyle);
-        }
-    }
-
-    void DrawCheckStroke(Vector2 start, Vector2 end)
-    {
-        Matrix4x4 saved = GUI.matrix;
-        Color old = GUI.color;
-        Vector2 delta = end - start;
-        GUIUtility.RotateAroundPivot(Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg, start);
-        GUI.color = Color.white;
-        GUI.DrawTexture(new Rect(start.x, start.y - 1f, delta.magnitude, 2.5f), Texture2D.whiteTexture);
-        GUI.color = old; GUI.matrix = saved;
     }
 
     void BeginPractice(int recipe)
@@ -1241,22 +1169,25 @@ public class BeerGlassPour : MonoBehaviour
             return false;
         }
 
-        public void DrawLabels(GUIStyle style)
+        private readonly WorldPanel[] toolLabels = new WorldPanel[3];
+        public void DrawLabels()
         {
             if (root == null) return;
             for (int index = 0; index < tools.Length; index++)
             {
-                if (tools[index] == null || held == index) continue;
-                Vector3 point = tools[index].transform.position + Vector3.up * (heights[index] + 0.06f);
-                if (Vector3.Distance(owner.playerCamera.transform.position, point) > 3.5f) continue;
-                Vector3 screen = owner.playerCamera.WorldToScreenPoint(point);
-                if (screen.z <= 0f) continue;
-                GUI.Label(new Rect(screen.x - 115f, Screen.height - screen.y - 20f, 230f, 45f), names[index], style);
+                if (tools[index] == null || held == index) { if (toolLabels[index] != null) toolLabels[index].Hide(); continue; }
+                if (toolLabels[index] == null) toolLabels[index] = new WorldPanel(owner.gameObject, "CocktailTool_Label_" + index, 290f, 105f, 0.001f);
+                WorldPanel label = toolLabels[index];
+                label.Pose(tools[index].transform.position + Vector3.up * (heights[index] + 0.10f), owner.playerCamera);
+                label.Begin(); label.Text(new Rect(10f, 8f, 270f, 89f), names[index], 27, null, TextAnchor.MiddleCenter, true); label.End();
             }
         }
 
+        public void HideUI() { foreach (WorldPanel label in toolLabels) if (label != null) label.Hide(); }
+
         public void Dispose()
         {
+        foreach (WorldPanel label in toolLabels) if (label != null) label.Dispose();
             if (IsHolding && tools[held] != null) UnityEngine.Object.Destroy(tools[held]);
             if (root != null) UnityEngine.Object.Destroy(root);
             foreach (Mesh mesh in meshes) UnityEngine.Object.Destroy(mesh);
@@ -1573,7 +1504,7 @@ public class BeerGlassPour : MonoBehaviour
         private readonly bool savedFog;
         private readonly FogMode savedFogMode;
         private readonly CameraClearFlags savedClearFlags;
-        private GUIStyle titleStyle, bodyStyle, smallStyle, buttonStyle;
+
         public bool IsDialogOpen => dialogOpen;
         public bool HasBeerOrder => state == State.Preparing && order >= 0 && order < 2;
         public bool HasCocktailOrder => state == State.Preparing && order >= 2;
@@ -1775,7 +1706,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             dialogLock = Cursor.lockState; dialogCursor = Cursor.visible; dialogOpen = true;
             customerInspected = true;
-            Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
+            Cursor.lockState = CursorLockMode.Locked; Cursor.visible = false;
         }
         private void CloseDialog()
         {
@@ -1959,125 +1890,86 @@ public class BeerGlassPour : MonoBehaviour
                 owner.ShowAction("ORDER FAILED", "This was your only attempt. No drink served. Wait for the next customer.", 4f);
             }
         }
-        public void Suspend() { CloseDialog(); if (root != null) root.SetActive(false); }
-        private void EnsureStyles()
-        {
-            if (bodyStyle != null) return;
-            bodyStyle = new GUIStyle(GUI.skin.label) { fontSize = 20, wordWrap = true, padding = new RectOffset(0, 0, 0, 0) };
-            bodyStyle.normal.textColor = new Color(0.89f, 0.96f, 0.93f);
-            titleStyle = new GUIStyle(bodyStyle) { fontSize = 27, fontStyle = FontStyle.Bold };
-            smallStyle = new GUIStyle(bodyStyle) { fontSize = 16 };
-            buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 21, fontStyle = FontStyle.Bold, wordWrap = true };
-        }
-        private static void Panel(Rect rect, Color color)
-        {
-            Color old = GUI.color; GUI.color = color; GUI.DrawTexture(rect, Texture2D.whiteTexture); GUI.color = old;
-        }
-        public void DrawTicket(Rect area)
-        {
-            if (state != State.Preparing || order < 0) return;
-            EnsureStyles();
-            Panel(area, new Color(0.025f, 0.09f, 0.095f, 0.97f));
-            Panel(new Rect(area.x, area.y, 5f, area.height), new Color(0.5f, 0.9f, 0.65f));
-            GUI.Label(new Rect(area.x + 16f, area.y + 12f, area.width - 32f, 25f), "ORDER #" + guestNumber.ToString("00"), smallStyle);
-            GUI.Label(new Rect(area.x + 16f, area.y + 46f, area.width - 32f, 80f), orderNames[order], titleStyle);
-            GUI.Label(new Rect(area.x + 16f, area.y + 140f, area.width - 32f, area.height - 150f), order < 2
-                ? "Pick up the correct glass.\nE at the tap to pour.\nLEFT CLICK the glowing serving spot."
-                : "Cocktail table\n45 seconds / ONE attempt\nMake the ordered drink, then press SERVE.", smallStyle);
-        }
-        // 화면 좌표로 그리는 안내이므로 고개를 돌려도 함께 따라옵니다. 커서/이동/시점은 변경하지 않습니다.
+        public void Suspend() {
+        HideUI(); CloseDialog(); if (root != null) root.SetActive(false); }
+
+        // Service notes live beside the customer in world space.
+
+        private WorldPanel statusBoard, decisionBoard, guideBoard, ticketBoard;
         private void DrawEasyGuide()
         {
-            if (!easyGuideVisible) return;
-            Rect note = new Rect(16f, 24f, 272f, 356f);
-            Panel(note, new Color(0.025f, 0.10f, 0.12f, 0.98f));
-            Panel(new Rect(note.x, note.y, note.width, 4f), new Color(0.62f, 0.91f, 0.72f));
-            GUI.Label(new Rect(note.x + 18f, note.y + 16f, 236f, 25f), "EASY MODE / QUICK NOTE", smallStyle);
-            bool ageCheck = kind == GuestKind.CheckID;
-            GUI.Label(new Rect(note.x + 18f, note.y + 52f, 236f, 34f), ageCheck ? "AGE CHECK" : "FIT TO SERVE?", titleStyle);
-            GUI.Label(new Rect(note.x + 18f, note.y + 103f, 236f, 106f), ageCheck
-                ? "This customer looks young. Check their ID before selling alcohol."
-                : "This customer appears intoxicated. Consider whether alcohol should be sold.", bodyStyle);
-            DrawGuideCheck(new Rect(note.x + 18f, note.y + 221f, 236f, 48f), ageCheck ? idChecked : customerInspected,
-                ageCheck ? "Check the customer's ID" : "Assess signs of intoxication");
-            DrawGuideCheck(new Rect(note.x + 18f, note.y + 281f, 236f, 48f), guideRefusalComplete,
-                ageCheck ? "Refuse alcohol if under 18" : "Refuse alcohol service");
+            if (!easyGuideVisible || guest == null) { if (guideBoard != null) guideBoard.Hide(); return; }
+            if (guideBoard == null) guideBoard = new WorldPanel(owner.gameObject, "Customer_ServiceGuideCard", 340f, 410f, 0.00165f);
+            // Customer-specific advice is clipped to a stand beside the guest, not to the player's view.
+            guideBoard.Pose(guest.transform.position + new Vector3(-0.98f, 1.58f, 0.25f), owner.playerCamera); guideBoard.Begin();
+            bool age = kind == GuestKind.CheckID;
+            guideBoard.Text(new Rect(18f, 16f, 304f, 28f), "EASY / SERVICE GUIDE", 23, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+            guideBoard.Text(new Rect(18f, 64f, 304f, 144f), age ? "This customer looks young. Check their ID before selling alcohol."
+                : "This customer appears intoxicated. Consider whether alcohol should be sold.", 27);
+            guideBoard.Check(new Rect(18f, 230f, 304f, 65f), age ? "Check ID" : "Assess intoxication", age ? idChecked : customerInspected);
+            guideBoard.Check(new Rect(18f, 315f, 304f, 70f), age ? "Refuse if under 18" : "Refuse alcohol service", guideRefusalComplete);
+            guideBoard.End();
         }
-        private void DrawGuideCheck(Rect row, bool complete, string instruction)
+        public void DrawTicket(WorldPanel panel)
         {
-            Rect box = new Rect(row.x, row.y + 5f, 22f, 22f);
-            Panel(box, complete ? new Color(0.18f, 0.55f, 0.36f) : new Color(0.14f, 0.22f, 0.24f));
-            if (complete)
-            {
-                owner.DrawCheckStroke(new Vector2(box.x + 4f, box.y + 11f), new Vector2(box.x + 9f, box.y + 16f));
-                owner.DrawCheckStroke(new Vector2(box.x + 9f, box.y + 16f), new Vector2(box.x + 18f, box.y + 6f));
-            }
-            GUI.Label(new Rect(row.x + 34f, row.y, row.width - 34f, row.height), instruction, smallStyle);
-        }
-        private void DrawLevelComplete(float width)
-        {
-            Rect area = new Rect((width - 600f) * 0.5f, 195f, 600f, 178f);
-            Panel(area, new Color(0.025f, 0.10f, 0.12f, 0.97f));
-            Panel(new Rect(area.x, area.y, area.width, 4f), new Color(0.62f, 0.91f, 0.72f));
-            GUI.Label(new Rect(area.x + 24f, area.y + 22f, 552f, 38f), "LEVEL 1 COMPLETE", titleStyle);
-            GUI.Label(new Rect(area.x + 24f, area.y + 73f, 552f, 36f), "Week day (easy) - All 10 customers handled.", bodyStyle);
-            GUI.Label(new Rect(area.x + 24f, area.y + 124f, 552f, 32f), "Served " + servedCount + "   Refused " + refusedCount + "   Missed " + missedCount, smallStyle);
+            if (state != State.Preparing || order < 0) return;
+            panel.Text(new Rect(20f, 18f, panel.Width - 40f, 35f), "ORDER #" + guestNumber.ToString("00"), 24, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+            panel.Text(new Rect(20f, 75f, panel.Width - 40f, 105f), orderNames[order], 32, WorldPanel.Ink, TextAnchor.UpperLeft, true);
+            panel.Text(new Rect(20f, 202f, panel.Width - 40f, panel.Height - 218f), order < 2
+                ? "Correct glass\nE at the tap\nLEFT CLICK to serve"
+                : "Cocktail station\n45 seconds / one attempt\nMake the drink, then SERVE", 24);
         }
         public void Draw()
         {
-            EnsureStyles();
-            float scale = Mathf.Min(Screen.width / 1280f, Screen.height / 720f);
-            Matrix4x4 saved = GUI.matrix; GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, Vector3.one * scale);
-            float width = Screen.width / scale, height = Screen.height / scale;
-            try
+            if (disposed) return;
+            if (statusBoard == null) statusBoard = new WorldPanel(owner.gameObject, "NightService_ShiftBoard", 740f, 400f, 0.0019f);
+            statusBoard.Pose(owner.serviceDesk.bounds.center + new Vector3(-2.5f, 1.1f, 0f), owner.playerCamera); statusBoard.Begin();
+            statusBoard.Text(new Rect(22f, 18f, 696f, 38f), "LEVEL 1 / Week day (easy)", 35, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+            statusBoard.Text(new Rect(22f, 80f, 696f, 43f), "Customers: " + completedGuests + " / " + CustomerLimit + "   Served " + servedCount + "   Refused " + refusedCount + "   Missed " + missedCount, 25);
+            string message = state == State.Completed ? "LEVEL 1 COMPLETE\nAll 10 customers handled."
+                : state == State.Waiting ? "The bar is open. The next customer will arrive shortly."
+                : state == State.Arriving ? "A customer is approaching the counter."
+                : state == State.Screening ? "Talk to the customer and choose how to respond."
+                : HasCocktailOrder ? "Take the order to the cocktail table."
+                : HasBeerOrder ? "Correct glass > Pour with E > Serve with LEFT CLICK"
+                : state == State.Receiving ? "The customer is receiving the drink." : "Customer leaving.";
+            statusBoard.Text(new Rect(22f, 145f, 696f, 105f), message, 30, state == State.Completed ? WorldPanel.Accent : WorldPanel.Ink);
+            if (Time.unscaledTime < owner.actionUntil)
+                statusBoard.Text(new Rect(22f, 274f, 696f, 108f), owner.actionTitle + "\n" + owner.actionDetail, 24, WorldPanel.Accent);
+            if (Time.unscaledTime >= owner.actionUntil)
+                statusBoard.Text(new Rect(22f, 274f, 696f, 108f), owner.prompt, 26, WorldPanel.Accent);
+            statusBoard.End();
+            DrawEasyGuide();
+            if (state == State.Preparing && order >= 0)
             {
-                Panel(new Rect(width - 338f, 16f, 322f, 156f), new Color(0.025f, 0.06f, 0.1f, 0.94f));
-                GUI.Label(new Rect(width - 320f, 26f, 290f, 24f), "LEVEL 1 / NIGHT SERVICE", smallStyle);
-                GUI.Label(new Rect(width - 320f, 57f, 290f, 36f), "Week day (easy)", titleStyle);
-                GUI.Label(new Rect(width - 320f, 104f, 290f, 24f), "Customers: " + completedGuests + " / " + CustomerLimit, smallStyle);
-                GUI.Label(new Rect(width - 320f, 138f, 290f, 24f), "Served " + servedCount + "   Refused " + refusedCount + "   Missed " + missedCount, smallStyle);
-                if (state == State.Completed) { DrawLevelComplete(width); return; }
-                DrawTicket(new Rect(16f, 24f, 272f, 292f));
-                string message = state == State.Waiting ? "The bar is open. Customers arrive every few seconds."
-                    : state == State.Arriving ? "A customer is approaching the counter."
-                    : state == State.Screening ? "Observe the customer, then click to choose a service decision."
-                    : HasCocktailOrder ? "Take the order to the rear cocktail table."
-                    : HasBeerOrder ? "Pick up > Pour with E > Serve with LEFT CLICK"
-                    : state == State.Receiving ? "The customer is receiving the drink." : "Customer leaving. Next arrival shortly.";
-                if (Time.unscaledTime >= owner.actionUntil)
-                {
-                    Panel(new Rect((width - 660f) * 0.5f, height - 82f, 660f, 62f), new Color(0.025f, 0.06f, 0.1f, 0.94f));
-                    GUI.Label(new Rect((width - 624f) * 0.5f, height - 68f, 624f, 48f), message, bodyStyle);
-                }
-                if (HasBeerOrder && owner.serviceMarker != null)
-                {
-                    Vector3 screen = owner.playerCamera.WorldToScreenPoint(owner.serviceMarker.transform.position + Vector3.up * 0.36f);
-                    if (screen.z > 0f)
-                    {
-                        Rect tag = new Rect(Mathf.Clamp(screen.x / scale - 120f, 296f, width - 256f), Mathf.Clamp((Screen.height - screen.y) / scale, 150f, height - 160f), 240f, 68f);
-                        Panel(tag, new Color(0.02f, 0.17f, 0.16f, 0.94f)); GUI.Label(tag, "SERVE HERE\nLEFT CLICK", bodyStyle);
-                    }
-                }
-                if (!dialogOpen) { DrawEasyGuide(); return; }
-                Panel(new Rect(0f, 0f, width, height), new Color(0f, 0f, 0f, 0.78f));
-                DrawEasyGuide();
-                float modalX = easyGuideVisible ? Mathf.Max(304f, (width - 740f) * 0.5f) : (width - 740f) * 0.5f;
-                Rect modal = new Rect(modalX, (height - 400f) * 0.5f, 740f, 400f);
-                Panel(modal, new Color(0.025f, 0.075f, 0.10f, 1f));
-                GUI.Label(new Rect(modal.x + 28f, modal.y + 25f, 684f, 45f), "CUSTOMER / SERVICE DECISION", titleStyle);
-                string detail = "I'd like a " + orderNames[order] + ", please.";
-                if (idChecked) detail += kind == GuestKind.CheckID ? "\n\nID RESULT: UNDER 18" : "\n\nID RESULT: 18 OR OVER";
-                GUI.Label(new Rect(modal.x + 28f, modal.y + 92f, 684f, 115f), detail, bodyStyle);
-                float buttonY = modal.y + 226f;
-                if (GUI.Button(new Rect(modal.x + 28f, buttonY, 216f, 78f), "SELL / TAKE ORDER", buttonStyle)) { AcceptOrder(); return; }
-                if (GUI.Button(new Rect(modal.x + 262f, buttonY, 216f, 78f), idChecked ? "REFUSE / ID & AGE" : "ASK ID / AGE CHECK", buttonStyle)) { RefuseService(true); return; }
-                if (GUI.Button(new Rect(modal.x + 496f, buttonY, 216f, 78f), "REFUSE / INTOXICATION", buttonStyle)) { RefuseService(false); return; }
-                if (GUI.Button(new Rect(modal.x + 28f, modal.yMax - 68f, 684f, 44f), "CLOSE [ESC]", buttonStyle)) CloseDialog();
+                if (ticketBoard == null) ticketBoard = new WorldPanel(owner.gameObject, "Bar_OrderTicketStand", 330f, 380f, 0.0018f);
+                ticketBoard.Pose(owner.serviceMarker.transform.position + new Vector3(-1.05f, 0.55f, 0.24f), owner.playerCamera);
+                ticketBoard.Begin(); DrawTicket(ticketBoard); ticketBoard.End();
             }
-            finally { GUI.matrix = saved; }
+            else if (ticketBoard != null) ticketBoard.Hide();
+            if (!dialogOpen || guest == null) { if (decisionBoard != null) decisionBoard.Hide(); return; }
+            if (decisionBoard == null) decisionBoard = new WorldPanel(owner.gameObject, "Customer_ServiceDecisionBoard", 760f, 400f, 0.0018f);
+            decisionBoard.Pose(guest.transform.position + new Vector3(-0.10f, 2.25f, 1f), owner.playerCamera); decisionBoard.Begin();
+            decisionBoard.Text(new Rect(22f, 16f, 716f, 40f), "CUSTOMER / SERVICE DECISION", 31, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+            string detail = "I'd like a " + orderNames[order] + ", please.";
+            if (idChecked) detail += kind == GuestKind.CheckID ? "\nID RESULT: UNDER 18" : "\nID RESULT: 18 OR OVER";
+            decisionBoard.Text(new Rect(22f, 78f, 716f, 104f), detail, 27);
+            if (decisionBoard.Button(new Rect(20f, 210f, 226f, 82f), "SELL / TAKE ORDER")) { AcceptOrder(); decisionBoard.End(); decisionBoard.Hide(); return; }
+            if (decisionBoard.Button(new Rect(267f, 210f, 226f, 82f), idChecked ? "REFUSE / ID & AGE" : "ASK ID / AGE CHECK")) { RefuseService(true); decisionBoard.End(); return; }
+            if (decisionBoard.Button(new Rect(514f, 210f, 226f, 82f), "REFUSE / INTOXICATION")) { RefuseService(false); decisionBoard.End(); decisionBoard.Hide(); return; }
+            if (decisionBoard.Button(new Rect(20f, 320f, 720f, 58f), "CLOSE / ESC")) CloseDialog();
+            decisionBoard.End();
         }
+        public void HideUI()
+        {
+            if (statusBoard != null) statusBoard.Hide(); if (decisionBoard != null) decisionBoard.Hide();
+            if (guideBoard != null) guideBoard.Hide(); if (ticketBoard != null) ticketBoard.Hide();
+        }
+
         public void Dispose()
         {
+        if (statusBoard != null) statusBoard.Dispose(); if (decisionBoard != null) decisionBoard.Dispose();
+        if (guideBoard != null) guideBoard.Dispose(); if (ticketBoard != null) ticketBoard.Dispose();
             if (disposed) return; disposed = true; CloseDialog();
             if (root != null) UnityEngine.Object.Destroy(root);
             foreach (Material material in materials) if (material != null) UnityEngine.Object.Destroy(material);
@@ -2195,9 +2087,7 @@ public class BeerGlassPour : MonoBehaviour
         private Quaternion pourStartRotation;
         private float pourTime, pourBoost;
         private Vector3 stirStart, shakerStart;
-        private GUIStyle bodyStyle, titleStyle, smallStyle, labelStyle, buttonStyle, timerStyle;
-        private GUIStyle ingredientNameStyle, statusStyle, countStyle, noticeTitleStyle, instructionStyle, timerCaptionStyle;
-        private GUIStyle feedbackTitleStyle, feedbackDetailStyle;
+
         public bool IsActive { get; private set; }
 
         public CocktailPractice(BeerGlassPour owner, int recipe, bool serviceOrder = false)
@@ -2218,12 +2108,15 @@ public class BeerGlassPour : MonoBehaviour
             root.transform.position = origin;
             root.layer = Layer;
             BuildScene();
+            lookPitch = camera.transform.eulerAngles.x;
+            if (lookPitch > 180f) lookPitch -= 360f;
+            lookYaw = camera.transform.eulerAngles.y;
             owner.playerCamera.enabled = false;
             if (sourceMovement != null) sourceMovement.enabled = false;
             if (owner.uniform != null) owner.uniform.enabled = false;
             camera.enabled = true;
             Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
+            Cursor.visible = false;
             IsActive = true;
             ResetRound();
         }
@@ -2745,33 +2638,9 @@ public class BeerGlassPour : MonoBehaviour
             return Input.GetMouseButton(0);
 #endif
         }
-        private Rect MeasurePanel() { return new Rect(16f, Screen.height - 118f, 302f, 102f); }
-        private Rect FinishButton() { return new Rect(Screen.width - 202f, Screen.height - 83f, 186f, 62f); }
-        private bool OverUI(Vector2 pointer)
-        {
-            if (serviceOrder) return ServiceTicketRect().Contains(pointer)
-                || new Rect(ServiceTicketRect().xMax + 16f, 0f, Screen.width, 132f).Contains(pointer)
-                || MeasurePanel().Contains(pointer) || FinishButton().Contains(pointer);
-            if (trial == 2) return TimerOnlyRect().Contains(pointer);
-            return new Rect(0f, 0f, Screen.width, 132f).Contains(pointer) || MeasurePanel().Contains(pointer)
-                || ((phase == Phase.Ready || trial == 1) && FinishButton().Contains(pointer));
-        }
-        private Rect LabelRect(int code)
-        {
-            if (code >= 10 && code < 20)
-            {
-                int index = code - 10;
-                float left = serviceOrder ? ServiceTicketRect().xMax + 16f : 16f;
-                float cellWidth = (Screen.width - left - 16f) / 5f;
-                return new Rect(left + index % 5 * cellWidth, 136f + index / 5 * 54f, cellWidth - 6f, 48f);
-            }
-            GameObject target = targets[code];
-            float height = code >= 10 && code < 20 ? (code == 16 ? 0.17f : 0.49f) : -0.03f;
-            Vector3 screen = camera.WorldToScreenPoint(target.transform.position + Vector3.up * height);
-            const float labelWidth = 136f;
-            float x = Mathf.Clamp(screen.x - labelWidth * 0.5f, 8f, Mathf.Max(8f, Screen.width - labelWidth - 8f));
-            return new Rect(x, Screen.height - screen.y - 21f, labelWidth, 42f);
-        }
+
+        private bool OverUI() { return WorldPanel.PointerOverInteractive(camera); }
+
         private string TargetName(int code)
         {
             if (code < 3) return glassNames[code];
@@ -2791,6 +2660,7 @@ public class BeerGlassPour : MonoBehaviour
             if (owner.PressedRecipeClose()) { Exit(); return; }
             if (awaitingStart || failed || completed)
             {
+                LookAround();
                 if (owner.sounds != null) owner.sounds.StopContinuous();
                 return;
             }
@@ -2799,10 +2669,11 @@ public class BeerGlassPour : MonoBehaviour
             if (FinishRequested()) { TryFinish(); return; }
             if (!pouring && !toolHeld && MeasureSwitchRequested()) SetMeasure(measure == 1f ? 0.5f : 1f);
             if (pouring) { TickPour(); return; }
-            Vector2 pointer = Pointer(); Vector2 guiPointer = new Vector2(pointer.x, Screen.height - pointer.y);
+            if (LookAround()) return;
+            Vector2 pointer = Pointer();
             if (toolHeld)
             {
-                if (LeftHeld() && !OverUI(guiPointer) && toolPickedFrame != Time.frameCount)
+                if (LeftHeld() && !OverUI() && toolPickedFrame != Time.frameCount)
                 {
                     Vector2 delta = PointerDelta();
                     float actionDelta = phase == Phase.Stir ? delta.x : delta.y;
@@ -2831,9 +2702,8 @@ public class BeerGlassPour : MonoBehaviour
             }
             if (owner.sounds != null) owner.sounds.StopContinuous();
             hovered = -1;
-            if (OverUI(guiPointer)) return;
-            foreach (int code in targets.Keys)
-                if (ShowTargetLabel(code) && LabelRect(code).Contains(guiPointer)) { hovered = code; break; }
+            if (OverUI()) return;
+
             if (hovered < 0 && Physics.Raycast(camera.ScreenPointToRay(pointer), out RaycastHit hit, 8f,
                 1 << Layer, QueryTriggerInteraction.Ignore) && hitTargets.TryGetValue(hit.collider, out int found)) hovered = found;
             if (hovered >= 0 && owner.PressedLeftClick()) SelectTarget(hovered);
@@ -2891,7 +2761,6 @@ public class BeerGlassPour : MonoBehaviour
                 roundRecorded = true;
             }
         }
-        private Rect TimerOnlyRect() { return new Rect(Screen.width - 170f, 16f, 154f, 54f); }
 
         private void Notify(string title, string detail, float duration = 2.4f, bool success = true, bool celebrate = false)
         {
@@ -2941,108 +2810,6 @@ public class BeerGlassPour : MonoBehaviour
                 default: return "ADD YOUR INGREDIENTS";
             }
         }
-        private void EnsureStyles()
-        {
-            if (bodyStyle != null) return;
-            bodyStyle = new GUIStyle(GUI.skin.label) { fontSize = 19, wordWrap = true, alignment = TextAnchor.MiddleLeft, padding = new RectOffset(0, 0, 0, 0) };
-            bodyStyle.normal.textColor = ink;
-            titleStyle = new GUIStyle(bodyStyle) { fontSize = 26, fontStyle = FontStyle.Bold };
-            smallStyle = new GUIStyle(bodyStyle) { fontSize = 15 };
-            instructionStyle = new GUIStyle(bodyStyle) { fontSize = 18 };
-            timerCaptionStyle = new GUIStyle(bodyStyle) { fontSize = 13, alignment = TextAnchor.MiddleRight };
-            labelStyle = new GUIStyle(bodyStyle) { fontSize = 14, alignment = TextAnchor.MiddleCenter };
-            ingredientNameStyle = new GUIStyle(bodyStyle) { fontSize = 16, fontStyle = FontStyle.Bold, wordWrap = false };
-            statusStyle = new GUIStyle(bodyStyle) { fontSize = 14 };
-            statusStyle.normal.textColor = new Color(0.65f, 0.76f, 0.73f);
-            buttonStyle = new GUIStyle(GUI.skin.label) { fontSize = 18, fontStyle = FontStyle.Bold, wordWrap = true, alignment = TextAnchor.MiddleCenter };
-            buttonStyle.normal.textColor = ink;
-            buttonStyle.hover.textColor = Color.white;
-            buttonStyle.active.textColor = new Color(0.6f, 1f, 0.75f);
-            timerStyle = new GUIStyle(titleStyle) { fontSize = 32, alignment = TextAnchor.MiddleRight };
-            countStyle = new GUIStyle(titleStyle) { fontSize = 23, alignment = TextAnchor.MiddleRight };
-            noticeTitleStyle = new GUIStyle(titleStyle) { fontSize = 23 };
-            noticeTitleStyle.normal.textColor = new Color(0.76f, 1f, 0.85f);
-            feedbackTitleStyle = new GUIStyle(bodyStyle) { fontSize = 32, fontStyle = FontStyle.Bold };
-            feedbackTitleStyle.normal.textColor = new Color(0.8f, 1f, 0.88f);
-            feedbackDetailStyle = new GUIStyle(bodyStyle) { fontSize = 20 };
-        }
-        private static void Fill(Rect rect, Color color)
-        {
-            Color old = GUI.color; GUI.color = color; GUI.DrawTexture(rect, Texture2D.whiteTexture); GUI.color = old;
-        }
-        private bool ActionButton(Rect rect, string text, bool primary = false, bool selected = false)
-        {
-            Fill(rect, primary || selected ? new Color(0.16f, 0.39f, 0.29f) : new Color(0.10f, 0.17f, 0.18f));
-            Fill(new Rect(rect.x, rect.yMax - 2f, rect.width, 2f), primary || selected ? new Color(0.5f, 0.9f, 0.65f) : new Color(0.24f, 0.34f, 0.33f));
-            return GUI.Button(rect, text, buttonStyle);
-        }
-        private void DrawIngredientTile(int code)
-        {
-            int ingredient = code - 10;
-            bool allowed = RequiredAmount(ingredient) >= 0f;
-            bool done = allowed && (trial == 0 ? !NeedsIngredient(ingredient) : included[ingredient]);
-            bool activePour = pouring && pourObject == targets[code];
-            Rect rect = LabelRect(code);
-            Fill(rect, activePour ? new Color(0.22f, 0.17f, 0.06f, 0.98f)
-                : hovered == code ? new Color(0.15f, 0.29f, 0.25f, 0.98f) : done
-                ? new Color(0.07f, 0.20f, 0.15f, 0.97f) : new Color(0.035f, 0.10f, 0.11f, 0.97f));
-            Fill(new Rect(rect.x, rect.y, 3f, rect.height), ingredientMaterials[ingredient].color);
-            GUI.Label(new Rect(rect.x + 10f, rect.y + 3f, rect.width - 18f, 23f), ingredientNames[ingredient], ingredientNameStyle);
-            GUI.Label(new Rect(rect.x + 10f, rect.y + 26f, rect.width - 18f, 19f),
-                activePour ? "Pouring..." : (done && trial == 0 ? "DONE  " : "") + IngredientProgress(ingredient), statusStyle);
-        }
-        private void DrawNotice()
-        {
-            if (Time.unscaledTime >= noticeUntil) return;
-            if (noticeCelebrate) { DrawPositiveFeedback(); return; }
-            float width = Mathf.Min(640f, Screen.width - 32f);
-            Rect rect = new Rect((Screen.width - width) * 0.5f, Screen.height - 220f, width, 84f);
-            Fill(rect, noticeSuccess ? new Color(0.035f, 0.18f, 0.13f, 0.98f) : new Color(0.22f, 0.17f, 0.08f, 0.98f));
-            Fill(new Rect(rect.x, rect.y, 5f, rect.height), noticeSuccess ? new Color(0.5f, 0.95f, 0.65f) : new Color(1f, 0.77f, 0.35f));
-            GUI.Label(new Rect(rect.x + 18f, rect.y + 5f, width - 36f, 32f), noticeTitle, noticeTitleStyle);
-            GUI.Label(new Rect(rect.x + 18f, rect.y + 39f, width - 36f, 40f), noticeDetail, smallStyle);
-        }
-        private void DrawPositiveFeedback()
-        {
-            float age = Mathf.Max(0f, Time.unscaledTime - noticeStarted);
-            float enter = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(age / 0.18f));
-            float alpha = Mathf.Min(Mathf.Clamp01(age / 0.08f), Mathf.Clamp01((noticeUntil - Time.unscaledTime) / 0.25f));
-            float width = Mathf.Min(760f, Screen.width - 32f);
-            float textWidth = width - 108f;
-            string heading = "GOOD JOB! " + noticeTitle;
-            float titleHeight = Mathf.Max(36f, feedbackTitleStyle.CalcHeight(new GUIContent(heading), textWidth));
-            float detailHeight = Mathf.Max(26f, feedbackDetailStyle.CalcHeight(new GUIContent(noticeDetail), textWidth));
-            float height = Mathf.Max(108f, titleHeight + detailHeight + 36f);
-            Rect panel = new Rect((Screen.width - width) * 0.5f,
-                Screen.height - 136f - height + (1f - enter) * 12f, width, height);
-            Matrix4x4 savedMatrix = GUI.matrix;
-            Color savedColor = GUI.color;
-            try
-            {
-                // UI만 작게 나타나게 합니다. 카메라/입력/타이머는 변경하지 않습니다.
-                float scale = 0.96f + 0.04f * enter;
-                GUIUtility.ScaleAroundPivot(new Vector2(scale, scale), panel.center);
-                GUI.color = new Color(savedColor.r, savedColor.g, savedColor.b, savedColor.a * alpha);
-                Fill(panel, new Color(0.025f, 0.19f, 0.12f, 0.98f * alpha));
-                Fill(new Rect(panel.x, panel.y, 6f, panel.height), new Color(0.4f, 1f, 0.65f, alpha));
-                Rect badge = new Rect(panel.x + 18f, panel.center.y - 27f, 54f, 54f);
-                Fill(badge, new Color(0.14f, 0.62f, 0.35f, alpha));
-                DrawFeedbackStroke(new Vector2(badge.x + 11f, badge.y + 28f), new Vector2(badge.x + 23f, badge.y + 40f), alpha);
-                DrawFeedbackStroke(new Vector2(badge.x + 23f, badge.y + 40f), new Vector2(badge.x + 44f, badge.y + 15f), alpha);
-                GUI.Label(new Rect(panel.x + 88f, panel.y + 12f, textWidth, titleHeight), heading, feedbackTitleStyle);
-                GUI.Label(new Rect(panel.x + 88f, panel.y + 20f + titleHeight, textWidth, detailHeight), noticeDetail, feedbackDetailStyle);
-            }
-            finally { GUI.matrix = savedMatrix; GUI.color = savedColor; }
-        }
-
-        private static void DrawFeedbackStroke(Vector2 start, Vector2 end, float alpha)
-        {
-            Matrix4x4 saved = GUI.matrix;
-            Vector2 delta = end - start;
-            GUIUtility.RotateAroundPivot(Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg, start);
-            Fill(new Rect(start.x, start.y - 2f, delta.magnitude, 4f), new Color(0.94f, 1f, 0.96f, alpha));
-            GUI.matrix = saved;
-        }
 
         private void Exit()
         {
@@ -3060,6 +2827,7 @@ public class BeerGlassPour : MonoBehaviour
         }
         private void ReleaseResources()
         {
+        DisposeUI();
             if (released) return;
             released = true;
             if (root != null) root.SetActive(false);
@@ -3067,205 +2835,149 @@ public class BeerGlassPour : MonoBehaviour
             foreach (Material material in materials) if (material != null) UnityEngine.Object.Destroy(material);
             foreach (Mesh mesh in meshes) if (mesh != null) UnityEngine.Object.Destroy(mesh);
         }
-        private Rect ServiceTicketRect() { return new Rect(16f, 16f, Mathf.Min(248f, Screen.width * 0.25f), 296f); }
-        private void DrawService()
-        {
-            if (failed)
-            {
-                Fill(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.82f));
-                float width = Mathf.Min(650f, Screen.width - 32f);
-                Rect panel = new Rect((Screen.width - width) * 0.5f, (Screen.height - 340f) * 0.5f, width, 340f);
-                Fill(panel, panelColor);
-                GUI.Label(new Rect(panel.x + 26f, panel.y + 26f, width - 52f, 44f), "ORDER FAILED", titleStyle);
-                GUI.Label(new Rect(panel.x + 26f, panel.y + 90f, width - 52f, 130f), error + "\n\nOne attempt per order. This customer will leave without a drink.", bodyStyle);
-                if (ActionButton(new Rect(panel.x + 26f, panel.yMax - 82f, width - 52f, 54f), "RETURN TO BAR", true)) Exit();
-                return;
-            }
-            owner.night.DrawTicket(ServiceTicketRect());
-            float left = ServiceTicketRect().xMax + 16f;
-            Fill(new Rect(left, 16f, Screen.width - left - 16f, 112f), panelColor);
-            GUI.Label(new Rect(left + 14f, 24f, Screen.width - left - 210f, 36f), "CUSTOMER ORDER / ONE ATTEMPT", smallStyle);
-            GUI.Label(new Rect(left + 14f, 62f, Screen.width - left - 210f, 56f), StageLabel(), bodyStyle);
-            Color old = GUI.color; GUI.color = remaining <= 10f ? new Color(1f, 0.44f, 0.32f) : ink;
-            GUI.Label(new Rect(Screen.width - 184f, 28f, 150f, 43f), remaining.ToString("0.0") + " s", timerStyle); GUI.color = old;
-            GUI.Label(new Rect(Screen.width - 184f, 78f, 150f, 24f), "45 SECONDS", timerCaptionStyle);
-            foreach (int code in targets.Keys)
-            {
-                if (!ShowTargetLabel(code)) continue;
-                if (code >= 10 && code < 20) { DrawIngredientTile(code); continue; }
-                Rect rect = LabelRect(code); Fill(rect, panelColor); GUI.Label(rect, TargetName(code), labelStyle);
-            }
-            DrawMeasureControls();
-            Rect hint = new Rect(334f, Screen.height - 118f, Mathf.Max(150f, Screen.width - 566f), 102f);
-            Fill(hint, panelColor);
-            bool mixing = phase == Phase.Stir || phase == Phase.Shake;
-            GUI.Label(new Rect(hint.x + 12f, hint.y + 7f, hint.width - 24f, 32f), mixing
-                ? (phase == Phase.Stir ? "STIR" : "SHAKE") + "  " + (strokes / 2) + " / 15"
-                : phase == Phase.Ready ? "READY TO SERVE" : "MAKE THE ORDERED DRINK", bodyStyle);
-            GUI.Label(new Rect(hint.x + 12f, hint.y + 43f, hint.width - 24f, 50f), mixing
-                ? "Hold LEFT CLICK and move " + (phase == Phase.Stir ? "left / right." : "up / down.")
-                : "ENTER / SERVE submits. ESC cancels this order.", smallStyle);
-            if (!pouring && ActionButton(FinishButton(), "SERVE", true)) TryFinish();
-            DrawNotice();
-        }
 
-        private void DrawTrialIntro()
+        private WorldPanel workBoard, controlsBoard, clockBoard, resultBoard, feedbackBoard, orderBoard;
+        private readonly System.Collections.Generic.Dictionary<int, WorldPanel> targetBoards = new System.Collections.Generic.Dictionary<int, WorldPanel>();
+        private float lookYaw, lookPitch;
+        public Camera ViewCamera => camera;
+
+        private void HideWorkUI()
         {
-            Fill(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.8f));
-            float width = Mathf.Min(740f, Screen.width - 32f);
-            Rect panel = new Rect((Screen.width - width) * 0.5f, (Screen.height - 470f) * 0.5f, width, 470f);
-            Fill(panel, panelColor);
-            GUI.Label(new Rect(panel.x + 28f, panel.y + 18f, width - 56f, 30f), recipeNames[recipe], smallStyle);
-            GUI.Label(new Rect(panel.x + 28f, panel.y + 55f, width - 56f, 44f), "TRIAL " + (trial + 1) + " / 3 - " + trialNames[trial], titleStyle);
-            owner.DrawTrialChecks(new Rect(panel.x + 28f, panel.y + 112f, width - 56f, 34f), recipe, smallStyle);
-            GUI.Label(new Rect(panel.x + 28f, panel.y + 162f, width - 56f, 64f), trialDescriptions[trial], bodyStyle);
-            GUI.Label(new Rect(panel.x + 28f, panel.y + 240f, width - 56f, 110f),
-                "Click objects to use them. Flip the jigger with R or click its cups.\nHold LEFT CLICK to stir or shake. Press ENTER to submit.\nESC returns to the bar. Your " + RoundSeconds.ToString("0") + " seconds start after BEGIN.", smallStyle);
-            float buttonWidth = (width - 72f) * 0.5f;
-            if (ActionButton(new Rect(panel.x + 28f, panel.yMax - 76f, buttonWidth, 48f), "BEGIN TRIAL " + (trial + 1), true))
-            {
-                awaitingStart = false;
-                Notify("TRIAL STARTED", RoundSeconds.ToString("0") + " seconds. Choose the " + glassNames[recipe] + ".");
-            }
-            if (ActionButton(new Rect(panel.center.x + 8f, panel.yMax - 76f, buttonWidth, 48f), "Back to the bar")) Exit();
+            if (workBoard != null) workBoard.Hide(); if (controlsBoard != null) controlsBoard.Hide();
+            if (clockBoard != null) clockBoard.Hide(); if (feedbackBoard != null) feedbackBoard.Hide();
+            if (orderBoard != null) orderBoard.Hide();
+            foreach (WorldPanel board in targetBoards.Values) board.Hide();
         }
-        private void DrawTrialResult()
+        private void DrawRoundBoard()
         {
-            Fill(new Rect(0f, 0f, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.8f));
-            bool courseDone = completed && owner.AllTrialsComplete;
-            float width = Mathf.Min(740f, Screen.width - 32f);
-            float height = courseDone ? 500f : 430f;
-            Rect panel = new Rect((Screen.width - width) * 0.5f, (Screen.height - height) * 0.5f, width, height);
-            Fill(panel, panelColor);
-            Fill(new Rect(panel.x, panel.y, width, 5f), completed ? new Color(0.5f, 0.9f, 0.65f) : new Color(1f, 0.56f, 0.3f));
-            string heading = failed ? "TRY AGAIN" : courseDone ? "TRIAL COMPLETE" : "TRIAL " + (trial + 1) + " COMPLETE";
-            GUI.Label(new Rect(panel.x + 28f, panel.y + 24f, width - 56f, 44f), heading, titleStyle);
-            if (courseDone)
+            HideWorkUI();
+            if (resultBoard == null) resultBoard = new WorldPanel(root, "Practice_BriefingAndResultsStand", 960f, 600f, 0.0018f, Layer);
+            resultBoard.Pose(origin + new Vector3(0f, 1.60f, -0.10f), camera); resultBoard.Begin();
+            string heading = awaitingStart ? "TRIAL " + (trial + 1) + " / " + trialNames[trial]
+                : failed ? serviceOrder ? "ORDER FAILED" : "TRY THIS TRIAL AGAIN"
+                : owner.AllTrialsComplete ? "ALL TRAINING COMPLETE" : "TRIAL " + (trial + 1) + " COMPLETE";
+            resultBoard.Text(new Rect(24f, 18f, 912f, 48f), heading, 36, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+            resultBoard.Text(new Rect(24f, 84f, 912f, 44f), recipeNames[recipe], 31);
+            if (awaitingStart)
             {
-                GUI.Label(new Rect(panel.x + 28f, panel.y + 82f, width - 56f, 48f), "All three cocktails, all three trials passed.\nOpen the bar?", bodyStyle);
-                for (int recipeIndex = 0; recipeIndex < 3; recipeIndex++)
-                {
-                    float rowY = panel.y + 148f + recipeIndex * 72f;
-                    GUI.Label(new Rect(panel.x + 28f, rowY, width - 56f, 28f), recipeNames[recipeIndex], smallStyle);
-                    owner.DrawTrialChecks(new Rect(panel.x + 28f, rowY + 27f, width - 56f, 34f), recipeIndex, smallStyle);
-                }
+                resultBoard.Text(new Rect(24f, 156f, 912f, 100f), trialDescriptions[trial], 28);
+                resultBoard.Text(new Rect(24f, 286f, 912f, 150f), "Time: " + RoundSeconds.ToString("0") + " seconds.\nAim at objects or their labels and LEFT CLICK. Flip the jigger with R.\nHold LEFT CLICK to stir / shake; hold RIGHT CLICK to look around.\nENTER submits the drink. ESC returns to the bar.", 26);
             }
+            else if (failed)
+                resultBoard.Text(new Rect(24f, 154f, 912f, 246f), error + (serviceOrder ? "\n\nOne attempt per order. Return to the bar for the next customer." : "\n\nThe trial was not checked. Retry with a fresh timer."), 29);
             else
             {
-                GUI.Label(new Rect(panel.x + 28f, panel.y + 84f, width - 56f, 104f), failed ? error
-                    : recipeNames[recipe] + " / " + trialNames[trial] + " passed.\n"
-                    + (owner.passedTrials[recipe] < 3 ? "Continue with less guidance in the next trial." : "All trials for this recipe are complete."), bodyStyle);
-                owner.DrawTrialChecks(new Rect(panel.x + 28f, panel.y + 214f, width - 56f, 34f), recipe, smallStyle);
-                GUI.Label(new Rect(panel.x + 28f, panel.y + 268f, width - 56f, 52f), failed
-                    ? "This trial was not checked. Retry with a fresh " + RoundSeconds.ToString("0") + " seconds."
-                    : owner.passedTrials[recipe] >= 3 ? "Return to the table and choose another recipe." : "The next trial starts with a short control reminder.", smallStyle);
+                string[] names = { "Gin & Tonic", "Negroni", "Long Island Iced Tea" };
+                for (int index = 0; index < 3; index++)
+                {
+                    resultBoard.Text(new Rect(24f, 159f + index * 78f, 470f, 52f), names[index], 28);
+                    for (int round = 0; round < 3; round++)
+                        resultBoard.Check(new Rect(525f + round * 135f, 159f + index * 78f, 135f, 52f), "Trial " + (round + 1), owner.passedTrials[index] > round);
+                }
+                resultBoard.Text(new Rect(24f, 421f, 912f, 55f), owner.AllTrialsComplete ? "All nine checks are complete. Open the bar?" : "Continue the course or return to the recipe table.", 27);
             }
-            float buttonWidth = (width - 72f) * 0.5f;
-            Rect primary = new Rect(panel.x + 28f, panel.yMax - 76f, buttonWidth, 48f);
-            Rect secondary = new Rect(panel.center.x + 8f, panel.yMax - 76f, buttonWidth, 48f);
-            string action = failed ? "RETRY TRIAL " + (trial + 1) : courseDone ? "OPEN THE BAR"
-                : owner.passedTrials[recipe] < 3 ? "NEXT TRIAL" : "BACK TO RECIPES";
-            if (ActionButton(primary, action, true))
+            string action = awaitingStart ? "BEGIN / " + RoundSeconds.ToString("0") + " SECONDS" : failed ? serviceOrder ? "RETURN TO BAR" : "RETRY TRIAL"
+                : owner.AllTrialsComplete ? "OPEN THE BAR" : owner.passedTrials[recipe] < 3 ? "NEXT TRIAL" : "BACK TO RECIPES";
+            if (resultBoard.Button(new Rect(24f, 511f, 440f, 66f), action, true, true))
             {
-                if (failed) ResetRound();
-                else if (courseDone) owner.OpenBar();
+                resultBoard.End();
+                if (awaitingStart) { awaitingStart = false; resultBoard.Hide(); Notify("TRIAL STARTED", RoundSeconds.ToString("0") + " seconds. Choose your glass."); }
+                else if (serviceOrder) Exit();
+                else if (failed) ResetRound();
+                else if (owner.AllTrialsComplete) owner.OpenBar();
                 else if (owner.passedTrials[recipe] < 3) { trial = owner.passedTrials[recipe]; ResetRound(); }
                 else Exit();
+                return;
             }
-            if (ActionButton(secondary, "Back to the bar")) Exit();
-        }
-        private void DrawMeasureControls()
-        {
-            Rect measures = MeasurePanel(); Fill(measures, panelColor);
-            GUI.Label(new Rect(measures.x + 12f, measures.y + 7f, 278f, 25f), "JIGGER AMOUNT / R TO FLIP", smallStyle);
-            bool previousEnabled = GUI.enabled; GUI.enabled = !pouring && !toolHeld;
-            if (ActionButton(new Rect(measures.x + 12f, measures.y + 38f, 132f, 48f), "0.5 oz", false, measure == 0.5f)) SetMeasure(0.5f);
-            if (ActionButton(new Rect(measures.x + 158f, measures.y + 38f, 132f, 48f), "1 oz", false, measure == 1f)) SetMeasure(1f);
-            GUI.enabled = previousEnabled;
-        }
-        private void DrawRecallHUD()
-        {
-            Fill(new Rect(16f, 16f, Screen.width - 32f, 112f), panelColor);
-            GUI.Label(new Rect(32f, 20f, Screen.width - 330f, 20f), "TRIAL 2 / 3 - INGREDIENT RECALL", smallStyle);
-            GUI.Label(new Rect(32f, 42f, Screen.width - 340f, 34f), recipeNames[recipe], titleStyle);
-            GUI.Label(new Rect(32f, 74f, Screen.width - 326f, 44f), "Glass: " + glassNames[recipe] + ". Use the listed ingredients.", instructionStyle);
-            GUI.Label(new Rect(Screen.width - 270f, 29f, 150f, 43f), remaining.ToString("0.0") + " s", timerStyle);
-            if (ActionButton(new Rect(Screen.width - 112f, 28f, 80f, 32f), "EXIT")) { Exit(); return; }
-            foreach (int code in targets.Keys)
-            {
-                if (!ShowTargetLabel(code)) continue;
-                if (code >= 10 && code < 20) { DrawIngredientTile(code); continue; }
-                Rect rect = LabelRect(code); Fill(rect, panelColor); GUI.Label(rect, TargetName(code), labelStyle);
-            }
-            DrawMeasureControls();
-            Rect hint = new Rect(334f, Screen.height - 118f, Screen.width - 566f, 102f);
-            Fill(hint, panelColor);
-            GUI.Label(new Rect(hint.x + 12f, hint.y + 8f, hint.width - 24f, 35f), "MAKE IT FROM MEMORY", smallStyle);
-            GUI.Label(new Rect(hint.x + 12f, hint.y + 45f, hint.width - 24f, 46f), "Press ENTER or FINISH when you are ready.", smallStyle);
-            if (!pouring && ActionButton(FinishButton(), "FINISH COCKTAIL", true)) TryFinish();
-            DrawNotice();
+            if (resultBoard.Button(new Rect(496f, 511f, 440f, 66f), "BACK TO BAR / ESC")) { resultBoard.End(); Exit(); return; }
+            resultBoard.End();
         }
         public void Draw()
         {
             if (!IsActive) return;
-            EnsureStyles();
-            if (serviceOrder) { DrawService(); return; }
-            if (awaitingStart) { DrawTrialIntro(); return; }
-            if (failed || completed) { DrawTrialResult(); return; }
-            if (trial == 2)
+            if (awaitingStart || failed || completed) { DrawRoundBoard(); return; }
+            if (resultBoard != null) resultBoard.Hide();
+            if (clockBoard == null) clockBoard = new WorldPanel(root, "Practice_PhysicalTimer", 300f, 164f, 0.0018f, Layer);
+            clockBoard.Pose(origin + new Vector3(-1.85f, 2.06f, 1.50f), camera); clockBoard.Begin();
+            clockBoard.Text(new Rect(14f, 10f, 272f, 30f), "ROUND CLOCK", 22, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
+            clockBoard.Text(new Rect(14f, 49f, 272f, 64f), remaining.ToString("0.0") + " s", 49,
+                remaining <= 10f ? new Color(1f, 0.48f, 0.32f) : WorldPanel.Ink, TextAnchor.MiddleCenter, true);
+            clockBoard.Text(new Rect(14f, 121f, 272f, 32f), RoundSeconds.ToString("0") + " SECOND LIMIT", 21, WorldPanel.Ink, TextAnchor.MiddleCenter); clockBoard.End();
+            if (trial < 2 || serviceOrder)
             {
-                Rect timer = TimerOnlyRect();
-                Fill(timer, panelColor);
-                GUI.Label(timer, remaining.ToString("0.0") + " s", timerStyle);
-                return;
+                if (workBoard == null) workBoard = new WorldPanel(root, "Practice_WorkbenchRecipeBoard", 960f, 245f, 0.0024f, Layer);
+                workBoard.Pose(origin + new Vector3(0f, 2.38f, 2.43f), camera); workBoard.Begin();
+                workBoard.Text(new Rect(22f, 14f, 916f, 45f), recipeNames[recipe] + (serviceOrder ? " / CUSTOMER ORDER" : " / TRIAL " + (trial + 1)), 35, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+                string guidance = trial == 0 ? NextInstruction() : "Glass: " + glassNames[recipe] + ". Choose the correct ingredients; recall the amounts.";
+                workBoard.Text(new Rect(22f, 79f, 916f, 91f), pouring ? "Pouring into the vessel..." : guidance, 30);
+                workBoard.Text(new Rect(22f, 188f, 916f, 40f), "LEFT CLICK to use  |  RIGHT CLICK + drag to look  |  ESC to leave", 24); workBoard.End();
             }
-            if (trial == 1) { DrawRecallHUD(); return; }
-            Fill(new Rect(16f, 16f, Screen.width - 32f, 112f), panelColor);
-            GUI.Label(new Rect(32f, 20f, Screen.width - 330f, 20f), "TRIAL 1 / 3 - " + StageLabel(), smallStyle);
-            GUI.Label(new Rect(32f, 42f, Screen.width - 340f, 34f), recipeNames[recipe], titleStyle);
-            GUI.Label(new Rect(32f, 74f, Screen.width - 326f, 44f), pouring ? "Pouring into the vessel..." : NextInstruction(), instructionStyle);
-            Color old = GUI.color; GUI.color = remaining <= 10f ? new Color(1f, 0.44f, 0.32f) : ink;
-            GUI.Label(new Rect(Screen.width - 270f, 29f, 150f, 43f), remaining.ToString("0.0") + " s", timerStyle); GUI.color = old;
-            GUI.Label(new Rect(Screen.width - 270f, 77f, 150f, 24f), "SECONDS LEFT / " + RoundSeconds.ToString("0"), timerCaptionStyle);
-            Fill(new Rect(32f, 124f, (Screen.width - 64f) * remaining / RoundSeconds, 3f), remaining <= 10f ? new Color(1f, 0.44f, 0.32f) : new Color(0.4f, 0.8f, 0.6f));
-            if (ActionButton(new Rect(Screen.width - 112f, 28f, 80f, 32f), "EXIT")) { Exit(); return; }
+            else if (workBoard != null) workBoard.Hide();
+            if (trial < 2 || serviceOrder)
+            {
+                if (controlsBoard == null) controlsBoard = new WorldPanel(root, "Practice_JiggerAndSubmissionStation", 440f, 310f, 0.0019f, Layer);
+                controlsBoard.Pose(origin + new Vector3(2.05f, 2.00f, 1.80f), camera); controlsBoard.Begin();
+                controlsBoard.Text(new Rect(16f, 12f, 408f, 32f), "JIGGER / R TO FLIP", 25, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+                if (controlsBoard.Button(new Rect(16f, 58f, 196f, 59f), "0.5 oz", !pouring && !toolHeld, measure == 0.5f)) SetMeasure(0.5f);
+                if (controlsBoard.Button(new Rect(228f, 58f, 196f, 59f), "1 oz", !pouring && !toolHeld, measure == 1f)) SetMeasure(1f);
+                string status = trial > 0 && !serviceOrder ? "MAKE IT FROM MEMORY\nFinish when you are ready."
+                    : phase == Phase.Stir || phase == Phase.Shake ? (phase == Phase.Stir ? "STIR" : "SHAKE") + " / " + (strokes / 2) + " of 15 round trips"
+                    : phase == Phase.Ready ? "READY TO SERVE" : StageLabel();
+                controlsBoard.Text(new Rect(16f, 138f, 408f, 82f), status, 27);
+                if (controlsBoard.Button(new Rect(16f, 232f, 408f, 62f), serviceOrder ? "SERVE" : "FINISH COCKTAIL", !pouring, true))
+                { controlsBoard.End(); TryFinish(); return; }
+                controlsBoard.End();
+            }
+            else if (controlsBoard != null) controlsBoard.Hide();
             foreach (int code in targets.Keys)
             {
-                if (!ShowTargetLabel(code)) continue;
-                if (code >= 10 && code < 20) { DrawIngredientTile(code); continue; }
-                Rect rect = LabelRect(code);
-                Fill(rect, hovered == code ? new Color(0.14f, 0.34f, 0.25f, 0.98f) : panelColor);
-                GUI.Label(rect, TargetName(code), labelStyle);
+                if (code == 32 || code == 33 || !ShowTargetLabel(code)) { if (targetBoards.TryGetValue(code, out WorldPanel hidden)) hidden.Hide(); continue; }
+                if (!targetBoards.TryGetValue(code, out WorldPanel label))
+                { label = new WorldPanel(root, "Practice_ObjectLabel_" + code, 260f, 100f, 0.00105f, Layer); targetBoards.Add(code, label); }
+                float offset = code >= 10 && code < 20 ? (code == 16 ? 0.25f : 0.60f) : code < 3 ? glassHeights[code] + 0.12f : code == 30 ? 0.46f : 0.45f;
+                label.Pose(targets[code].transform.position + Vector3.up * offset, camera); label.Begin();
+                if (label.Button(new Rect(5f, 8f, 250f, 84f), TargetName(code), !pouring && !toolHeld)) { label.End(); SelectTarget(code); return; }
+                label.End();
             }
-            DrawMeasureControls();
-            Rect progress = new Rect(334f, Screen.height - 118f, Screen.width - 350f, 102f);
-            Fill(progress, panelColor);
-            if (phase == Phase.Stir || phase == Phase.Shake)
+            if (serviceOrder && owner.night != null)
             {
-                GUI.Label(new Rect(progress.x + 12f, progress.y + 7f, progress.width - 130f, 30f), phase == Phase.Stir ? "STIRRING" : "SHAKING", titleStyle);
-                GUI.Label(new Rect(progress.xMax - 112f, progress.y + 7f, 100f, 30f), (strokes / 2) + " / 15", countStyle);
-                string gesture = phase == Phase.Stir ? "left / right" : "up / down";
-                GUI.Label(new Rect(progress.x + 12f, progress.y + 41f, progress.width - 24f, 32f), toolHeld
-                    ? "Hold LEFT CLICK and move " + gesture + "." : "Click the highlighted tool to start.", smallStyle);
-                Fill(new Rect(progress.x + 12f, progress.y + 83f, (progress.width - 24f) * Mathf.Clamp01(strokes / 30f), 7f), new Color(0.4f, 0.85f, 0.6f));
+                if (orderBoard == null) orderBoard = new WorldPanel(root, "Practice_PhysicalOrderTicket", 330f, 380f, 0.00165f, Layer);
+                orderBoard.Pose(origin + new Vector3(-1.45f, 1.27f, 0.62f), camera); orderBoard.Begin(); owner.night.DrawTicket(orderBoard); orderBoard.End();
             }
-            else if (phase == Phase.Ready)
+            if (Time.unscaledTime < noticeUntil && trial != 2)
             {
-                GUI.Label(new Rect(progress.x + 12f, progress.y + 10f, progress.width - 220f, 32f), pouring ? "FINISHING POUR" : "READY TO SERVE", bodyStyle);
-                GUI.Label(new Rect(progress.x + 12f, progress.y + 47f, progress.width - 220f, 40f), pouring ? "Wait for the pour to finish." : "All checks complete.", smallStyle);
-                if (!pouring && ActionButton(FinishButton(), "FINISH COCKTAIL", true)) TryFinish();
+                if (feedbackBoard == null) feedbackBoard = new WorldPanel(root, "Practice_ActionReceipt", 650f, 160f, 0.0024f, Layer);
+                feedbackBoard.Pose(origin + new Vector3(0f, 1.81f, 2.43f), camera); feedbackBoard.Begin();
+                feedbackBoard.Text(new Rect(18f, 12f, 614f, 42f), (noticeCelebrate ? "GOOD JOB! " : "") + noticeTitle, 29,
+                    noticeSuccess ? WorldPanel.Accent : new Color(1f, 0.57f, 0.37f), TextAnchor.UpperLeft, true);
+                feedbackBoard.Text(new Rect(18f, 68f, 614f, 78f), noticeDetail, 25); feedbackBoard.End();
             }
-            else
-            {
-                int done = CompletedIngredientCount(); int total = recipeIngredients[recipe].Length;
-                GUI.Label(new Rect(progress.x + 12f, progress.y + 7f, progress.width - 130f, 30f), "RECIPE PROGRESS", bodyStyle);
-                GUI.Label(new Rect(progress.xMax - 112f, progress.y + 7f, 100f, 30f), done + " / " + total, countStyle);
-                GUI.Label(new Rect(progress.x + 12f, progress.y + 41f, progress.width - 24f, 32f), phase == Phase.ChooseGlass
-                    ? "Choose your glass to begin." : "Any ingredient order. Match the amounts above.", smallStyle);
-                Fill(new Rect(progress.x + 12f, progress.y + 83f, (progress.width - 24f) * done / total, 7f), new Color(0.4f, 0.85f, 0.6f));
-            }
-            DrawNotice();
+            else if (feedbackBoard != null) feedbackBoard.Hide();
         }
+        public void HideUI() { HideWorkUI(); if (resultBoard != null) resultBoard.Hide(); }
+
+        private void DisposeUI()
+        {
+            if (workBoard != null) workBoard.Dispose(); if (controlsBoard != null) controlsBoard.Dispose();
+            if (clockBoard != null) clockBoard.Dispose(); if (resultBoard != null) resultBoard.Dispose();
+            if (feedbackBoard != null) feedbackBoard.Dispose(); if (orderBoard != null) orderBoard.Dispose();
+            foreach (WorldPanel board in targetBoards.Values) board.Dispose();
+            targetBoards.Clear();
+        }
+        private bool LookAround()
+        {
+#if ENABLE_INPUT_SYSTEM
+            bool held = Mouse.current != null && Mouse.current.rightButton.isPressed;
+#else
+            bool held = Input.GetMouseButton(1);
+#endif
+            if (!held) return false;
+            Vector2 delta = PointerDelta(); lookYaw += delta.x * 0.12f; lookPitch = Mathf.Clamp(lookPitch - delta.y * 0.12f, -65f, 65f);
+            camera.transform.localRotation = Quaternion.Euler(lookPitch, lookYaw, 0f);
+            if (owner.sounds != null) owner.sounds.PauseContinuous();
+            return true;
+        }
+
         public void Dispose()
         {
             Exit();
@@ -3316,7 +3028,7 @@ public class BeerGlassPour : MonoBehaviour
         private Vector2 scroll;
         private CursorLockMode previousLock;
         private bool previousCursorVisible;
-        private GUIStyle titleStyle, sectionStyle, bodyStyle, buttonStyle, smallStyle, amountStyle, numberStyle, centeredStyle;
+
         public bool IsOpen => selected >= 0;
         public bool BlocksInput => IsOpen || closeFrame == Time.frameCount;
 
@@ -3436,8 +3148,8 @@ public class BeerGlassPour : MonoBehaviour
                     selected = index;
                     contentTab = 0;
                     scroll = Vector2.zero;
-                    Cursor.lockState = CursorLockMode.None;
-                    Cursor.visible = true;
+                    Cursor.lockState = CursorLockMode.Locked;
+                    Cursor.visible = false;
                 }
                 return true;
             }
@@ -3446,6 +3158,7 @@ public class BeerGlassPour : MonoBehaviour
 
         public void Close()
         {
+        if (recipeBoard != null) recipeBoard.Hide();
             if (!IsOpen) return;
             selected = -1;
             closeFrame = Time.frameCount;
@@ -3453,153 +3166,52 @@ public class BeerGlassPour : MonoBehaviour
             Cursor.visible = previousCursorVisible;
         }
 
-        private GUIStyle TextStyle(int size, Font face, Color color, FontStyle weight = FontStyle.Normal)
-        {
-            GUIStyle style = new GUIStyle(GUI.skin.label) { font = face, fontSize = size, fontStyle = weight,
-                wordWrap = true, padding = new RectOffset(0, 0, 0, 0) };
-            style.normal.textColor = color;
-            return style;
-        }
-
-        private void EnsureStyles()
-        {
-            if (bodyStyle != null) return;
-            bodyStyle = TextStyle(22, font, ink);
-            titleStyle = TextStyle(38, displayFont, ink);
-            sectionStyle = TextStyle(15, font, muted, FontStyle.Bold);
-            smallStyle = TextStyle(16, font, muted);
-            amountStyle = TextStyle(22, font, accents[0], FontStyle.Bold);
-            amountStyle.alignment = TextAnchor.UpperRight;
-            numberStyle = TextStyle(19, font, muted, FontStyle.Bold);
-            centeredStyle = TextStyle(16, font, muted);
-            centeredStyle.alignment = TextAnchor.MiddleCenter;
-            buttonStyle = TextStyle(18, font, ink, FontStyle.Bold);
-            buttonStyle.alignment = TextAnchor.MiddleCenter;
-            buttonStyle.hover.textColor = new Color(0.25f, 0.5f, 0.36f);
-            buttonStyle.active.textColor = buttonStyle.hover.textColor;
-        }
-
-        private static void Fill(Rect rect, Color color)
-        {
-            Color previous = GUI.color;
-            GUI.color = color;
-            GUI.DrawTexture(rect, Texture2D.whiteTexture);
-            GUI.color = previous;
-        }
-
-        private bool Button(Rect rect, string label, bool active = false)
-        {
-            Fill(rect, active ? new Color(0.87f, 0.88f, 0.81f) : new Color(1f, 1f, 1f, 0.32f));
-            return GUI.Button(rect, label, buttonStyle);
-        }
-
-        private void DrawIllustration(Rect space)
-        {
-            if (illustration == null) return;
-            float aspect = illustration.width / (3f * illustration.height);
-            float width = Mathf.Min(space.width, space.height * aspect);
-            float height = width / aspect;
-            Rect picture = new Rect(space.center.x - width * 0.5f, space.center.y - height * 0.5f, width, height);
-            GUI.DrawTextureWithTexCoords(picture, illustration, new Rect(selected / 3f, 0f, 1f / 3f, 1f));
-        }
-
-        private void SwitchTo(int index)
-        {
-            selected = (index + 3) % 3;
-            contentTab = 0;
-            scroll = Vector2.zero;
-            // Rebuild GUILayout before drawing a different number of recipe rows.
-            GUIUtility.ExitGUI();
-        }
-
-        private void SwitchContent(int tab)
-        {
-            if (contentTab == tab) return;
-            contentTab = tab;
-            scroll = Vector2.zero;
-            GUIUtility.ExitGUI();
-        }
-
+        private WorldPanel recipeBoard;
         public void DrawOverlay()
         {
-            if (!IsOpen) return;
-            EnsureStyles();
-            Fill(new Rect(0, 0, Screen.width, Screen.height), new Color(0.025f, 0.055f, 0.055f, 0.86f));
-            const float width = 1040f;
-            const float height = 680f;
-            float scale = Mathf.Min((Screen.width - 32f) / width, (Screen.height - 32f) / height, 1.15f);
-            Matrix4x4 previousMatrix = GUI.matrix;
-            GUI.matrix = Matrix4x4.TRS(new Vector3((Screen.width - width * scale) * 0.5f,
-                (Screen.height - height * scale) * 0.5f, 0f), Quaternion.identity, new Vector3(scale, scale, 1f));
-            try
+            if (!IsOpen) { if (recipeBoard != null) recipeBoard.Hide(); return; }
+            if (recipeBoard == null) recipeBoard = new WorldPanel(owner.gameObject, "CocktailRecipe_ReadingStand", 960f, 640f, 0.00175f);
+            Vector3 position = notes[selected].transform.position;
+            recipeBoard.Pose(new Vector3(position.x, 1.94f, position.z + 0.50f), owner.playerCamera);
+            recipeBoard.Begin();
+            recipeBoard.Text(new Rect(24f, 17f, 730f, 45f), titles[selected], 39, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+            if (recipeBoard.Button(new Rect(800f, 16f, 136f, 48f), "CLOSE")) { Close(); recipeBoard.End(); return; }
+            for (int index = 0; index < 3; index++)
+                if (recipeBoard.Button(new Rect(24f + index * 310f, 80f, 292f, 52f), shortTitles[index], true, selected == index))
+                { selected = index; contentTab = 0; }
+            if (illustration != null) recipeBoard.Image(new Rect(28f, 156f, 238f, 308f), illustration, new Rect(selected / 3f, 0f, 1f / 3f, 1f));
+            recipeBoard.Text(new Rect(28f, 479f, 240f, 40f), glasses[selected], 24);
+            for (int round = 0; round < 3; round++)
+                recipeBoard.Check(new Rect(28f + round * 83f, 536f, 83f, 42f), (round + 1).ToString(), owner.passedTrials[selected] > round);
+            if (recipeBoard.Button(new Rect(300f, 154f, 302f, 50f), "INGREDIENTS", true, contentTab == 0)) contentTab = 0;
+            if (recipeBoard.Button(new Rect(620f, 154f, 316f, 50f), "METHOD", true, contentTab == 1)) contentTab = 1;
+            if (contentTab == 0)
             {
-                Fill(new Rect(8f, 12f, width, height), new Color(0f, 0f, 0f, 0.2f));
-                Fill(new Rect(0f, 0f, width, height), cream);
-                Fill(new Rect(0f, 0f, width, 5f), accents[selected]);
-                GUI.Label(new Rect(36f, 24f, 300f, 22f), "THE  BAR  BOOK", sectionStyle);
-                GUI.Label(new Rect(36f, 55f, 290f, 28f), "RECIPE 0" + (selected + 1) + " / 03", smallStyle);
-                if (Button(new Rect(844f, 20f, 160f, 36f), "CLOSE [ESC]")) { Close(); return; }
-                for (int index = 0; index < 3; index++)
-                    if (Button(new Rect(384f + index * 208f, 66f, 200f, 34f), shortTitles[index], selected == index))
-                        SwitchTo(index);
-                Fill(new Rect(352f, 112f, 1f, 487f), new Color(0.78f, 0.78f, 0.7f, 0.65f));
-                DrawIllustration(new Rect(36f, 112f, 280f, 365f));
-                Fill(new Rect(64f, 493f, 224f, 32f), new Color(accents[selected].r, accents[selected].g, accents[selected].b, 0.10f));
-                GUI.Label(new Rect(64f, 493f, 224f, 32f), methods[selected], centeredStyle);
-                GUI.Label(new Rect(36f, 535f, 280f, 28f), glasses[selected], centeredStyle);
-                owner.DrawTrialChecks(new Rect(36f, 573f, 280f, 34f), selected, smallStyle);
-                GUI.Label(new Rect(384f, 119f, 620f, 53f), titles[selected], titleStyle);
-                GUI.Label(new Rect(384f, 180f, 620f, 28f), "Any ingredient order. Match quantities and technique.", smallStyle);
-
-                if (Button(new Rect(384f, 219f, 300f, 36f), "INGREDIENTS", contentTab == 0)) SwitchContent(0);
-                if (Button(new Rect(696f, 219f, 308f, 36f), "METHOD", contentTab == 1)) SwitchContent(1);
-                GUILayout.BeginArea(new Rect(384f, 271f, 620f, 321f));
-                scroll = GUILayout.BeginScrollView(scroll, false, false);
-                if (contentTab == 0)
+                for (int row = 0; row < ingredientNames[selected].Length; row++)
                 {
-                    for (int row = 0; row < ingredientNames[selected].Length; row++)
-                    {
-                        GUILayout.BeginHorizontal();
-                        GUILayout.Label(ingredientNames[selected][row], bodyStyle, GUILayout.MinHeight(32f));
-                        GUILayout.Label(amounts[selected][row], amountStyle, GUILayout.Width(135f));
-                        GUILayout.EndHorizontal();
-                        Fill(GUILayoutUtility.GetRect(1f, 1f, GUILayout.ExpandWidth(true)), new Color(0.78f, 0.78f, 0.7f, 0.5f));
-                        GUILayout.Space(11f);
-                    }
+                    recipeBoard.Text(new Rect(300f, 222f + row * 43f, 446f, 39f), ingredientNames[selected][row], 25);
+                    recipeBoard.Text(new Rect(754f, 222f + row * 43f, 178f, 39f), amounts[selected][row], 25, WorldPanel.Accent);
                 }
-                else
-                {
-                    for (int step = 0; step < steps[selected].Length; step++)
-                    {
-                        GUILayout.BeginHorizontal();
-                        GUILayout.Label((step + 1).ToString("00"), numberStyle, GUILayout.Width(38f));
-                        GUILayout.Label(steps[selected][step], bodyStyle, GUILayout.MinHeight(32f));
-                        GUILayout.EndHorizontal();
-                        GUILayout.Space(16f);
-                    }
-                }
-                GUILayout.EndScrollView();
-                GUILayout.EndArea();
-
-                Fill(new Rect(36f, 614f, 968f, 1f), new Color(0.78f, 0.78f, 0.7f));
-                string startLabel = owner.AllTrialsComplete && !owner.barOpened ? "Open the bar?"
-                    : owner.passedTrials[selected] >= 3 ? "Practice again" : owner.passedTrials[selected] == 0
-                    ? "Start to make" : "Start trial " + (owner.passedTrials[selected] + 1);
-                if (Button(new Rect(36f, 622f, 280f, 42f), startLabel, true))
-                {
-                    if (owner.AllTrialsComplete && !owner.barOpened) owner.OpenBar();
-                    else owner.BeginPractice(selected);
-                    GUIUtility.ExitGUI();
-                }
-                if (Button(new Rect(384f, 622f, 155f, 42f), "<  PREVIOUS")) SwitchTo(selected - 1);
-                GUI.Label(new Rect(630f, 622f, 130f, 42f), "0" + (selected + 1) + " / 03", centeredStyle);
-                if (Button(new Rect(849f, 622f, 155f, 42f), "NEXT  >")) SwitchTo(selected + 1);
             }
-            finally { GUI.matrix = previousMatrix; }
+            else
+                for (int step = 0; step < steps[selected].Length; step++)
+                    recipeBoard.Text(new Rect(300f, 218f + step * 55f, 632f, 52f), (step + 1) + ". " + steps[selected][step], 23);
+            string action = owner.AllTrialsComplete && !owner.barOpened ? "OPEN THE BAR"
+                : owner.passedTrials[selected] >= 3 ? "PRACTICE AGAIN" : "START TO MAKE / TRIAL " + (owner.passedTrials[selected] + 1);
+            if (recipeBoard.Button(new Rect(300f, 570f, 636f, 50f), action, true, true))
+            {
+                recipeBoard.End();
+                if (owner.AllTrialsComplete && !owner.barOpened) owner.OpenBar(); else owner.BeginPractice(selected);
+                return;
+            }
+            recipeBoard.End();
         }
+
+        public void HideUI() { if (recipeBoard != null) recipeBoard.Hide(); }
 
         public void Dispose()
         {
+        if (recipeBoard != null) recipeBoard.Dispose();
             Close();
             if (root != null) UnityEngine.Object.Destroy(root);
             foreach (Material material in paper) if (material != null) UnityEngine.Object.Destroy(material);
@@ -3773,31 +3385,230 @@ internal sealed class WaypointBeacon
 
 // 착용/집기/따르기/서빙/도구/카드의 조준 입력 안내에만 사용하는 공통 표시입니다.
 // 기존 동기화 파일 안에 두어 새 Inspector 연결이나 에셋이 필요하지 않습니다.
-internal static class InteractionPromptUI
+// Runtime diegetic UI. These canvases are world objects, never children of a camera.
+internal sealed class WorldPanel : System.IDisposable
 {
-    private static GUIStyle style;
+    private readonly GameObject root;
+    private readonly RectTransform canvasRect;
+    private readonly System.Collections.Generic.List<UnityEngine.UI.Graphic> graphics = new System.Collections.Generic.List<UnityEngine.UI.Graphic>();
+    private readonly Material frameMaterial;
+    private static readonly System.Collections.Generic.List<WorldPanel> panels = new System.Collections.Generic.List<WorldPanel>();
+    private readonly float width, height;
+    private int used, shownFrame = -1;
+    private bool hasButtons, disposed;
+    private Camera viewer;
+    public float Width => width;
+    public float Height => height;
+    public bool Visible => root != null && root.activeInHierarchy;
+    public static readonly Color Ink = new Color(0.88f, 0.95f, 0.91f);
+    public static readonly Color Accent = new Color(0.44f, 0.87f, 0.64f);
+    public static readonly Color Paper = new Color(0.035f, 0.09f, 0.095f, 1f);
 
-    public static void Draw(string message)
+    public WorldPanel(GameObject owner, string name, float width, float height, float metresPerPixel = 0.002f, int layer = 2)
     {
-        if (string.IsNullOrEmpty(message) || Cursor.lockState != CursorLockMode.Locked) return;
-        if (style == null)
+        this.width = width; this.height = height;
+        root = new GameObject(name, typeof(RectTransform), typeof(Canvas));
+        root.layer = layer;
+        UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(root, owner.scene);
+        canvasRect = root.GetComponent<RectTransform>();
+        canvasRect.sizeDelta = new Vector2(width, height);
+        root.transform.localScale = Vector3.one * metresPerPixel;
+        Canvas canvas = root.GetComponent<Canvas>();
+        canvas.renderMode = RenderMode.WorldSpace;
+        canvas.overrideSorting = false;
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null) shader = Shader.Find("Unlit/Color");
+        if (shader != null)
         {
-            style = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold,
-                alignment = TextAnchor.MiddleCenter, wordWrap = true,
-                padding = new RectOffset(0, 0, 0, 0) };
-            style.normal.textColor = Color.white;
+            frameMaterial = new Material(shader) { color = new Color(0.20f, 0.14f, 0.095f) };
+            GameObject frame = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            frame.name = "SolidBoardFrame"; frame.layer = layer;
+            frame.transform.SetParent(root.transform, false);
+            frame.transform.localPosition = new Vector3(0f, 0f, 13f);
+            frame.transform.localScale = new Vector3(width + 18f, height + 18f, 20f);
+            Collider collider = frame.GetComponent<Collider>(); collider.enabled = false; UnityEngine.Object.Destroy(collider);
+            frame.GetComponent<Renderer>().sharedMaterial = frameMaterial;
         }
-        style.fontSize = Mathf.Clamp(Mathf.RoundToInt(Screen.height * (32f / 600f)), 28, 44);
-        GUIContent content = new GUIContent(message);
-        float maxWidth = Mathf.Min(1000f, Screen.width - 48f);
-        float width = Mathf.Min(maxWidth, Mathf.Max(320f, style.CalcSize(content).x + 32f));
-        float height = Mathf.Max(style.fontSize + 16f, style.CalcHeight(content, width - 32f) + 16f);
-        float y = Mathf.Min(Screen.height * 0.5f + 16f, Screen.height - height - 20f);
-        Rect panel = new Rect((Screen.width - width) * 0.5f, Mathf.Max(16f, y), width, height);
-        Color old = GUI.color;
-        GUI.color = new Color(0.02f, 0.055f, 0.065f, 0.94f);
-        GUI.DrawTexture(panel, Texture2D.whiteTexture);
-        GUI.color = old;
-        GUI.Label(new Rect(panel.x + 16f, panel.y + 8f, width - 32f, height - 16f), message, style);
+        root.SetActive(false);
+        panels.RemoveAll(panel => panel.root == null);
+        panels.Add(this);
     }
+    public void Pose(Vector3 worldPosition, Camera camera)
+    {
+        if (disposed || root == null || camera == null) return;
+        viewer = camera; root.GetComponent<Canvas>().worldCamera = camera;
+        root.transform.position = worldPosition;
+        Vector3 away = worldPosition - camera.transform.position; away.y = 0f;
+        if (away.sqrMagnitude > 0.0001f)
+        {
+            Quaternion facing = Quaternion.LookRotation(away, Vector3.up);
+            root.transform.rotation = !Visible ? facing : Quaternion.RotateTowards(root.transform.rotation, facing, 180f * Time.unscaledDeltaTime);
+        }
+    }
+    public void Begin()
+    {
+        if (!Visible) shownFrame = Time.frameCount;
+        root.SetActive(true); used = 0; hasButtons = false;
+        Fill(new Rect(0f, 0f, width, height), Paper);
+        Fill(new Rect(0f, 0f, width, 4f), Accent);
+    }
+    private T Graphic<T>(Rect rect) where T : UnityEngine.UI.Graphic
+    {
+        UnityEngine.UI.Graphic graphic = used < graphics.Count ? graphics[used] : null;
+        if (graphic == null || !(graphic is T))
+        {
+            if (graphic != null) { graphic.gameObject.SetActive(false); UnityEngine.Object.Destroy(graphic.gameObject); }
+            GameObject node = new GameObject(typeof(T).Name, typeof(RectTransform));
+            node.layer = root.layer; node.transform.SetParent(root.transform, false);
+            graphic = node.AddComponent<T>(); graphic.raycastTarget = false;
+            if (used < graphics.Count) graphics[used] = graphic; else graphics.Add(graphic);
+        }
+        graphic.gameObject.SetActive(true);
+        RectTransform transform = graphic.rectTransform;
+        transform.anchorMin = transform.anchorMax = new Vector2(0f, 1f);
+        transform.pivot = new Vector2(0f, 1f);
+        transform.anchoredPosition = new Vector2(rect.x, -rect.y);
+        transform.sizeDelta = new Vector2(Mathf.Max(0.01f, rect.width), Mathf.Max(0.01f, rect.height));
+        used++; return (T)graphic;
+    }
+    public void Fill(Rect rect, Color color) { Graphic<UnityEngine.UI.Image>(rect).color = color; }
+    public void Text(Rect rect, string text, int size = 24, Color? color = null, TextAnchor alignment = TextAnchor.UpperLeft, bool bold = false)
+    {
+        var label = Graphic<UnityEngine.UI.Text>(rect);
+        label.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        label.fontSize = size; label.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
+        label.alignment = alignment; label.color = color ?? Ink;
+        label.horizontalOverflow = HorizontalWrapMode.Wrap; label.verticalOverflow = VerticalWrapMode.Truncate;
+        label.supportRichText = false; label.text = text ?? "";
+    }
+    public void Image(Rect rect, Texture image, Rect uv)
+    {
+        var picture = Graphic<UnityEngine.UI.RawImage>(rect); picture.texture = image; picture.uvRect = uv; picture.color = Color.white;
+    }
+    public bool Button(Rect rect, string caption, bool enabled = true, bool primary = false)
+    {
+        hasButtons |= enabled;
+        bool hover = enabled && HitVisible(viewer, out Vector2 point, out float distance) && rect.Contains(point);
+        Fill(rect, !enabled ? new Color(0.10f, 0.13f, 0.14f) : hover ? new Color(0.20f, 0.49f, 0.34f)
+            : primary ? new Color(0.13f, 0.34f, 0.25f) : new Color(0.09f, 0.17f, 0.18f));
+        Text(new Rect(rect.x + 9f, rect.y + 4f, rect.width - 18f, rect.height - 8f), caption, 24,
+            enabled ? Ink : new Color(0.45f, 0.51f, 0.49f), TextAnchor.MiddleCenter, true);
+        return hover && Time.frameCount != shownFrame && SpatialInput.TakeClick();
+    }
+    public void Check(Rect rect, string caption, bool complete)
+    {
+        Fill(new Rect(rect.x, rect.y + 4f, 24f, 24f), complete ? new Color(0.13f, 0.45f, 0.28f) : new Color(0.15f, 0.20f, 0.21f));
+        Text(new Rect(rect.x, rect.y, 24f, 32f), complete ? "X" : "", 23, Accent, TextAnchor.MiddleCenter, true);
+        Text(new Rect(rect.x + 36f, rect.y, rect.width - 36f, rect.height), caption, 23);
+    }
+    public void Progress(Rect rect, float progress)
+    {
+        Fill(rect, new Color(0.12f, 0.19f, 0.19f));
+        Fill(new Rect(rect.x, rect.y, rect.width * Mathf.Clamp01(progress), rect.height), Accent);
+    }
+    public void End()
+    {
+        for (int index = used; index < graphics.Count; index++) if (graphics[index] != null) graphics[index].gameObject.SetActive(false);
+    }
+    public void Hide() { if (root != null) root.SetActive(false); }
+    private bool Hit(Camera camera, out Vector2 point, out float distance)
+    {
+        point = Vector2.zero; distance = 0f;
+        if (!Visible || camera == null || camera != viewer) return false;
+        Ray ray = SpatialInput.Ray(camera);
+        if (Vector3.Dot(ray.direction, root.transform.forward) <= 0f) return false;
+        Plane plane = new Plane(root.transform.forward, root.transform.position);
+        if (!plane.Raycast(ray, out distance) || distance < 0.05f || distance > 6f) return false;
+        Vector3 local = root.transform.InverseTransformPoint(ray.GetPoint(distance));
+        point = new Vector2(local.x + width * 0.5f, height * 0.5f - local.y);
+        if (!new Rect(0f, 0f, width, height).Contains(point)) return false;
+        if (Physics.Raycast(ray, out RaycastHit obstruction, Mathf.Max(0f, distance - 0.025f),
+            Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) return false;
+        return true;
+    }
+    private bool HitVisible(Camera camera, out Vector2 point, out float distance)
+    {
+        if (!Hit(camera, out point, out distance)) return false;
+        // A nearer world placard occludes buttons behind it, just like the physical scene.
+        foreach (WorldPanel panel in panels)
+            if (panel != this && panel.Hit(camera, out Vector2 otherPoint, out float otherDistance)
+                && otherDistance < distance - 0.002f) return false;
+        return true;
+    }
+    public static bool PointerOverInteractive(Camera camera)
+    {
+        foreach (WorldPanel panel in panels)
+            if (panel.hasButtons && panel.HitVisible(camera, out Vector2 point, out float distance)) return true;
+        return false;
+    }
+    public static bool TryPointerHit(Camera camera, out Vector3 point)
+    {
+        point = Vector3.zero; float nearest = float.MaxValue; bool found = false;
+        foreach (WorldPanel panel in panels)
+            if (panel.Hit(camera, out Vector2 local, out float distance) && distance < nearest)
+            { nearest = distance; point = SpatialInput.Ray(camera).GetPoint(distance); found = true; }
+        return found;
+    }
+    public void Dispose()
+    {
+        if (disposed) return; disposed = true; panels.Remove(this); Hide();
+        if (root != null) UnityEngine.Object.Destroy(root);
+        if (frameMaterial != null) UnityEngine.Object.Destroy(frameMaterial);
+    }
+}
+
+internal static class SpatialInput
+{
+    private static int consumedFrame = -1;
+    public static bool Consumed => consumedFrame == Time.frameCount;
+    public static Ray Ray(Camera camera)
+    {
+        if (Cursor.lockState == CursorLockMode.Locked) return camera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+#if ENABLE_INPUT_SYSTEM
+        Vector2 pointer = Mouse.current != null ? Mouse.current.position.ReadValue() : new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
+#else
+        Vector2 pointer = Input.mousePosition;
+#endif
+        return camera.ScreenPointToRay(pointer);
+    }
+    public static bool TakeClick()
+    {
+#if ENABLE_INPUT_SYSTEM
+        bool pressed = Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame;
+#else
+        bool pressed = Input.GetMouseButtonDown(0);
+#endif
+        if (!pressed || Consumed) return false;
+        consumedFrame = Time.frameCount; return true;
+    }
+}
+
+internal sealed class WorldAim : System.IDisposable
+{
+    private GameObject point;
+    private Material material;
+    public void Tick(Camera camera)
+    {
+        if (camera == null || !camera.enabled) { if (point != null) point.SetActive(false); return; }
+        Ray ray = SpatialInput.Ray(camera); Vector3 target;
+        bool hit = WorldPanel.TryPointerHit(camera, out target);
+        if (!hit && Physics.Raycast(ray, out RaycastHit surface, 6f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+        { target = surface.point; hit = true; }
+        if (point == null)
+        {
+            Shader shader = Shader.Find("Universal Render Pipeline/Unlit"); if (shader == null) shader = Shader.Find("Unlit/Color");
+            if (shader == null) return;
+            material = new Material(shader) { color = WorldPanel.Accent };
+            point = GameObject.CreatePrimitive(PrimitiveType.Sphere); point.name = "SpatialRayTip_Runtime";
+            UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(point, camera.gameObject.scene);
+            Collider collider = point.GetComponent<Collider>(); collider.enabled = false; UnityEngine.Object.Destroy(collider);
+            point.GetComponent<Renderer>().sharedMaterial = material;
+            point.transform.localScale = Vector3.one * 0.009f;
+        }
+        point.layer = camera.gameObject.layer == 30 ? 30 : 2;
+        point.SetActive(hit);
+        if (hit) point.transform.position = target - ray.direction * 0.012f;
+    }
+    public void Hide() { if (point != null) point.SetActive(false); }
+    public void Dispose() { if (point != null) UnityEngine.Object.Destroy(point); if (material != null) UnityEngine.Object.Destroy(material); }
 }

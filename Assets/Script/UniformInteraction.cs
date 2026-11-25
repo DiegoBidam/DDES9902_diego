@@ -29,6 +29,7 @@ public class UniformInteraction : MonoBehaviour
     public bool IsFullyDressed => ShirtWorn && ApronWorn;
     public bool ShiftStarted => shiftStarted;
     public bool ShiftCompleted { get; private set; }
+    public string GuideMessage => playingStationTrialVoice ? "BAR STATION / Listen to the guide..." : subtitle;
     public bool IsGuidePlaying => showingShiftMessage || guidePlaybackFrame == Time.frameCount
         || (clothingVoiceSource != null && clothingVoiceSource.isActiveAndEnabled && clothingVoiceSource.isPlaying)
         || (entranceVoiceSource != null && entranceVoiceSource.isActiveAndEnabled && entranceVoiceSource.isPlaying)
@@ -50,8 +51,7 @@ public class UniformInteraction : MonoBehaviour
     private BarPlayerMovement movement;
     private string prompt = "";
     private string subtitle = "";
-    private GUIStyle textStyle;
-    private GUIStyle completionStyle;
+
     private string completionMessage = "";
     private float completionUntil;
     private GameObject uniformSignRoot;
@@ -419,6 +419,7 @@ public class UniformInteraction : MonoBehaviour
 
     void LateUpdate()
     {
+        DrawWorldUniform();
         if (clockBeacon != null)
         {
             if (!shiftStarted && clockGuide != null && clockGuide.activeInHierarchy
@@ -446,11 +447,13 @@ public class UniformInteraction : MonoBehaviour
 
     void OnDisable()
     {
+        if (uniformBoard != null) uniformBoard.Hide();
         if (clockBeacon != null) clockBeacon.Hide();
     }
 
     void OnDestroy()
     {
+        if (uniformBoard != null) uniformBoard.Dispose();
         if (clockBeacon != null) clockBeacon.Dispose();
         if (stationTrialVoice != null)
         {
@@ -480,109 +483,24 @@ public class UniformInteraction : MonoBehaviour
         completionUntil = Time.unscaledTime + 2.5f;
     }
 
-    void DrawStepConfirmation()
+    private WorldPanel uniformBoard;
+    private void DrawWorldUniform()
     {
-        if (Time.unscaledTime >= completionUntil) return;
-        if (completionStyle == null)
-        {
-            completionStyle = new GUIStyle(GUI.skin.label) { fontSize = 24, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
-            completionStyle.normal.textColor = new Color(0.7f, 1f, 0.82f);
-        }
-        float width = Mathf.Min(580f, Screen.width - 32f);
-        Rect panel = new Rect((Screen.width - width) * 0.5f, 76f, width, 50f);
-        Color old = GUI.color;
-        GUI.color = new Color(0.025f, 0.15f, 0.11f, 0.96f);
-        GUI.DrawTexture(panel, Texture2D.whiteTexture);
-        GUI.color = old;
-        GUI.Label(panel, completionMessage, completionStyle);
-    }
-
-    void OnGUI()
-    {
-        if (textStyle == null)
-        {
-            textStyle = new GUIStyle(GUI.skin.label);
-            textStyle.fontSize = 20;
-            textStyle.alignment = TextAnchor.MiddleCenter;
-            textStyle.wordWrap = true;
-            textStyle.normal.textColor = Color.white;
-        }
-
-        // 출근해 다음 스테이지로 이동한 뒤에는 착용 상태 HUD를 반복해서 표시하지 않습니다.
-        if (!shiftStarted)
-        {
-            string status =
-                "Shirt: " + (ShirtWorn ? "ON" : "--") +
-                "    Apron: " + (ApronWorn ? "ON" : "--");
-            GUI.Box(new Rect(15, 15, 320, 45), "");
-            GUI.Label(new Rect(15, 15, 320, 45), status, textStyle);
-        }
-        DrawStepConfirmation();
-
-        if (showingShiftMessage)
-        {
-            float width = Mathf.Min(640f, Screen.width - 30f);
-            Rect area = new Rect(
-                (Screen.width - width) / 2f,
-                Screen.height / 2f - 70f,
-                width,
-                140f
-            );
-
-            GUI.Box(area, "");
-            GUI.Label(
-                area,
-                (playingStationTrialVoice ? "BAR STATION\nListen to the guide..." : "Shift started.\nWelcome to the beer station.")
-                    + "\nYou can move. Interact after the guide ends.",
-                textStyle
-            );
-
-            return;
-        }
-
-        if (Cursor.lockState != CursorLockMode.Locked)
-        {
-            GUI.Label(
-                new Rect(0, Screen.height / 2f + 40, Screen.width, 45),
-                "Click the game view to start",
-                textStyle
-            );
-        }
-        else
-        {
-            GUI.Label(
-                new Rect(Screen.width / 2f - 15, Screen.height / 2f - 15, 30, 30),
-                "+",
-                textStyle
-            );
-
-            if (!string.IsNullOrEmpty(prompt))
-            {
-                InteractionPromptUI.Draw(prompt);
-            }
-        }
-
-        if (clothingVoiceSource != null && clothingVoiceSource.isPlaying)
-        {
-            float width = Mathf.Min(640f, Screen.width - 30f);
-            Rect area = new Rect(
-                (Screen.width - width) / 2f,
-                Screen.height - 150f,
-                width,
-                70f
-            );
-
-            GUI.Box(area, "");
-            GUI.Label(area, subtitle, textStyle);
-        }
-        else if (IsFullyDressed && !shiftStarted)
-        {
-            GUI.Label(
-                new Rect(0, Screen.height - 80, Screen.width, 60),
-                "Uniform complete! Head to the bar station.",
-                textStyle
-            );
-        }
+        if (shiftStarted || playerCamera == null) { if (uniformBoard != null) uniformBoard.Hide(); return; }
+        if (uniformBoard == null) uniformBoard = new WorldPanel(gameObject, "Uniform_PreparationChecklist", 580f, 350f, 0.0018f);
+        Vector3 anchor = shirtSign != null ? shirtSign.position : shirt != null ? shirt.transform.position : transform.position;
+        anchor = new Vector3(anchor.x - 1.55f, 1.95f, anchor.z + 0.25f);
+        uniformBoard.Pose(anchor, playerCamera); uniformBoard.Begin();
+        uniformBoard.Text(new Rect(20f, 16f, 540f, 43f), "BEFORE YOUR SHIFT", 32, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+        uniformBoard.Check(new Rect(20f, 78f, 265f, 42f), "T-shirt on", ShirtWorn);
+        uniformBoard.Check(new Rect(300f, 78f, 260f, 42f), "Apron on", ApronWorn);
+        string message = clothingVoiceSource != null && clothingVoiceSource.isPlaying ? subtitle
+            : IsFullyDressed ? "Uniform complete. Find the CLOCK IN marker and press E."
+            : !string.IsNullOrEmpty(prompt) ? prompt : "Wear the T-shirt, then the apron. Aim at the clothing and press E.";
+        uniformBoard.Text(new Rect(20f, 143f, 540f, 113f), message, 28);
+        uniformBoard.Text(new Rect(20f, 274f, 540f, 61f), Time.unscaledTime < completionUntil ? completionMessage
+            : IsGuidePlaying ? "You can move. Interact after the guide ends." : "Look at an item + E to wear / clock in.", 24, WorldPanel.Accent);
+        uniformBoard.End();
     }
     // 원본: Tools/AudioSources/StationTrialStart.mp3 (첨부 '트라이얼 시작.mp3').
     // 자동 동기화 대상인 이 파일에 44.1 kHz mono signed 16-bit PCM을 gzip/base64로 포함합니다.

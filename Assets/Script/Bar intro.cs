@@ -23,13 +23,17 @@ public class BarIntro : MonoBehaviour
 
     private bool started;
     private bool finished;
-    private GUIStyle messageStyle;
-    private GUIStyle startButtonStyle;
-    private GUIStyle startTitleStyle, startHintStyle, startEnterStyle, startFooterStyle;
+
     public bool IsWaitingToStart => !started;
 
     void Awake()
     {
+        uiCamera = GetComponentInChildren<Camera>();
+        if (uiCamera != null)
+        {
+            Vector3 forward = uiCamera.transform.forward; forward.y = 0f;
+            introAnchor = uiCamera.transform.position + forward.normalized * 2.1f;
+        }
         movement = GetComponent<BarPlayerMovement>();
         uniform = GetComponent<UniformInteraction>();
         voiceSource = GetComponent<AudioSource>();
@@ -335,6 +339,7 @@ public class BarIntro : MonoBehaviour
 
     void OnDestroy()
     {
+        if (introBoard != null) introBoard.Dispose();
 #if !UNITY_WEBGL || UNITY_EDITOR
         if (musicRequest != null) musicRequest.Abort();
 #endif
@@ -379,73 +384,24 @@ public class BarIntro : MonoBehaviour
         uniform.enabled = true;
     }
 
-    void OnGUI()
+    private WorldPanel introBoard;
+    private Camera uiCamera;
+    private Vector3 introAnchor;
+    void LateUpdate()
     {
-        if (finished) return;
-        if (messageStyle == null)
-        {
-            messageStyle = new GUIStyle(GUI.skin.label) { fontSize = 22,
-                alignment = TextAnchor.MiddleCenter, wordWrap = true };
-            messageStyle.normal.textColor = Color.white;
-            startButtonStyle = new GUIStyle(GUI.skin.button) {
-                fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter };
-            startButtonStyle.normal.textColor = Color.white;
-            startTitleStyle = new GUIStyle(messageStyle) { fontStyle = FontStyle.Bold };
-            startHintStyle = new GUIStyle(messageStyle);
-            startEnterStyle = new GUIStyle(messageStyle) { fontStyle = FontStyle.Bold };
-            startFooterStyle = new GUIStyle(messageStyle);
-        }
-
-        if (!started)
-        {
-            DrawStartScreen();
-            return;
-        }
-
-        float width = Mathf.Min(560f, Screen.width - 32f);
-        float left = (Screen.width - width) * 0.5f;
-        float centerY = Screen.height * 0.5f;
-        Rect area = new Rect(left, centerY - 80f, width, 160f);
-        GUI.Box(area, "");
-        GUI.Label(new Rect(left + 15f, area.y + 15f, width - 30f, 130f),
-            "Welcome to your first shift!\nHead inside the bar.", messageStyle);
+        if (finished) { if (introBoard != null) introBoard.Hide(); return; }
+        if (uiCamera == null) return;
+        if (introBoard == null) introBoard = new WorldPanel(gameObject, "Entrance_WelcomeSign", 820f, 470f, 0.002f);
+        introBoard.Pose(introAnchor, uiCamera); introBoard.Begin();
+        introBoard.Text(new Rect(24f, 24f, 772f, 88f), "HOW TO BE A BARTENDER", 43, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
+        introBoard.Text(new Rect(24f, 126f, 772f, 80f), started ? "Welcome to your first shift! Head inside the bar." : "Look around freely. This sign stays at the entrance.", 29, null, TextAnchor.MiddleCenter);
+        // Enter starts the game; clicking to capture the WebGL pointer never starts it accidentally.
+        introBoard.Fill(new Rect(90f, 227f, 640f, 110f), new Color(0.13f, 0.34f, 0.25f));
+        introBoard.Text(new Rect(90f, 227f, 640f, 110f), started ? "LISTEN TO THE GUIDE" : "START / PRESS ENTER", 39, null, TextAnchor.MiddleCenter, true);
+        introBoard.Text(new Rect(24f, 369f, 772f, 79f), started ? "You can move. Actions unlock after the voice ends." : "Click the game to capture the mouse. Press ENTER to start.\nWASD walking unlocks when you start.", 25, null, TextAnchor.MiddleCenter);
+        introBoard.End();
     }
-
-    void DrawStartScreen()
-    {
-        float scale = Mathf.Max(0.01f, Mathf.Min((Screen.width - 32f) / 960f,
-            (Screen.height - 32f) / 600f, 1.6f));
-        float centerX = Screen.width * 0.5f;
-        float centerY = Screen.height * 0.5f;
-        float panelWidth = 800f * scale;
-        float left = centerX - panelWidth * 0.5f;
-        startButtonStyle.fontSize = Mathf.Max(1, Mathf.RoundToInt(60f * scale));
-        startTitleStyle.fontSize = Mathf.Max(1, Mathf.RoundToInt(30f * scale));
-        startHintStyle.fontSize = Mathf.Max(1, Mathf.RoundToInt(22f * scale));
-        startEnterStyle.fontSize = Mathf.Max(1, Mathf.RoundToInt(28f * scale));
-        startFooterStyle.fontSize = Mathf.Max(1, Mathf.RoundToInt(20f * scale));
-
-        // 화면 좌표로 그려 시점을 돌려도 버튼이 항상 정중앙에 따라옵니다.
-        Color oldColor = GUI.color;
-        GUI.color = new Color(0.025f, 0.075f, 0.08f, 0.82f);
-        GUI.DrawTexture(new Rect(left, centerY - 200f * scale, panelWidth, 400f * scale), Texture2D.whiteTexture);
-        GUI.color = oldColor;
-        GUI.Label(new Rect(left + 24f * scale, centerY - 174f * scale, panelWidth - 48f * scale, 40f * scale),
-            "HOW TO BE A BARTENDER", startTitleStyle);
-        GUI.Label(new Rect(left + 24f * scale, centerY - 124f * scale, panelWidth - 48f * scale, 32f * scale),
-            "Look around freely with your mouse.", startHintStyle);
-
-        Color oldBackground = GUI.backgroundColor;
-        GUI.backgroundColor = new Color(0.12f, 0.5f, 0.36f);
-        // 시작은 Enter로만 처리해, 화면 포커스/마우스 잠금을 위한 클릭이 게임을 시작하지 않게 합니다.
-        GUI.Box(new Rect(centerX - 280f * scale, centerY - 72f * scale, 560f * scale, 144f * scale),
-            "START", startButtonStyle);
-        GUI.backgroundColor = oldBackground;
-        GUI.Label(new Rect(left + 24f * scale, centerY + 92f * scale, panelWidth - 48f * scale, 46f * scale),
-            "PRESS ENTER TO START", startEnterStyle);
-        GUI.Label(new Rect(left + 24f * scale, centerY + 148f * scale, panelWidth - 48f * scale, 34f * scale),
-            "WASD movement unlocks after you start.", startFooterStyle);
-    }
+    void OnDisable() { if (introBoard != null) introBoard.Hide(); }
 
 #if !UNITY_WEBGL || UNITY_EDITOR
     // 첨부 MP3 원본: Tools/AudioSources/PourAndPlay.mp3.

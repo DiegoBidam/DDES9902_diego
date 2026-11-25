@@ -17,7 +17,6 @@ public class EntranceGuide : MonoBehaviour
 
     public bool IsPlaying => playbackFrame == Time.frameCount
         || (voiceSource != null && voiceSource.isActiveAndEnabled && voiceSource.isPlaying);
-    private GUIStyle subtitleStyle;
 
     void Awake()
     {
@@ -90,33 +89,19 @@ public class EntranceGuide : MonoBehaviour
         voiceSource.Play();
     }
 
-    void OnGUI()
+    private WorldPanel entranceBoard;
+    void LateUpdate()
     {
-        if (voiceSource == null || !voiceSource.isPlaying)
-            return;
-
-        if (subtitleStyle == null)
-        {
-            subtitleStyle = new GUIStyle(GUI.skin.label);
-            subtitleStyle.fontSize = 22;
-            subtitleStyle.alignment = TextAnchor.MiddleCenter;
-            subtitleStyle.wordWrap = true;
-            subtitleStyle.normal.textColor = Color.white;
-        }
-
-        float width = Mathf.Min(640f, Screen.width - 30f);
-        Rect area = new Rect(
-            (Screen.width - width) / 2f,
-            Screen.height - 150f,
-            width,
-            65f
-        );
-
-        GUI.Box(area, "");
-        GUI.Label(
-            area,
-            "Let's get you ready. Put on your shirt first.",
-            subtitleStyle
-        );
+        if (!IsPlaying || player == null) { if (entranceBoard != null) entranceBoard.Hide(); return; }
+        Camera camera = player.GetComponentInChildren<Camera>();
+        if (camera == null) return;
+        if (entranceBoard == null) entranceBoard = new WorldPanel(gameObject, "Entrance_InstructionPlaque", 620f, 170f, 0.0018f);
+        Vector3 anchor = entranceZone.bounds.center + new Vector3(-1.25f, 0f, 0.5f); anchor.y = 2.10f;
+        entranceBoard.Pose(anchor, camera); entranceBoard.Begin();
+        entranceBoard.Text(new Rect(20f, 16f, 580f, 38f), "WELCOME / GET READY", 29, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
+        entranceBoard.Text(new Rect(20f, 70f, 580f, 84f), "Let's get you ready. Put on your shirt first.", 28, null, TextAnchor.MiddleCenter);
+        entranceBoard.End();
     }
+    void OnDisable() { if (entranceBoard != null) entranceBoard.Hide(); }
+    void OnDestroy() { if (entranceBoard != null) entranceBoard.Dispose(); }
 }

@@ -102,14 +102,9 @@ public class BarPlayerMovement : MonoBehaviour
         if (waitingToStart) movement = Vector2.zero;
 
         // 음성 안내 중에도 이동/시점을 허용합니다. 행위 입력은 각 상호작용 스크립트에서 막습니다.
-        // 레시피 창을 열었을 때만 메뉴 조작을 위해 이동/시점 입력을 비웁니다.
-        if (beerInteraction != null && beerInteraction.IsRecipeOpen)
-        {
-            movement = Vector2.zero;
-            look = Vector2.zero;
-            clicked = false;
-            escape = false;
-        }
+        // Spatial recipe/customer boards do not freeze walking or looking.
+        // ESC closes those boards first; a second ESC releases the pointer.
+        if (beerInteraction != null && beerInteraction.IsRecipeOpen) escape = false;
 
         if (escape)
         {
