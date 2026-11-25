@@ -16,7 +16,7 @@ forward = normal(sub(target,cam)); right = (1.,0.,0.); up = cross(forward,right)
 fov = float(re.search(r'camera.fieldOfView = ([\d.]+)f',source)[1])
 scale = 720/(2*math.tan(math.radians(fov/2)))
 def box(position,width,height):
-    away = sub(position,cam); facing = normal((away[0],0.,away[2])); horizontal = cross((0.,1.,0.),facing)
+    horizontal = (1.,0.,0.)  # PoseFixed(..., Quaternion.identity): physical workbench placards
     points = []
     for x in [-.5,.5]:
         for y in [-.5,.5]:
@@ -27,7 +27,7 @@ def box(position,width,height):
 def overlap(a,b): return all(max(a[0][i],b[0][i]) < min(a[1][i],b[1][i]) for i in range(2))
 boards = {}
 for name in ['clockBoard','controlsBoard','workBoard','feedbackBoard']:
-    position = vector(re.search(name+r'.Pose\(origin \+ new Vector3\(([^)]+)\)',source)[1])
+    position = vector(re.search(name+r'.PoseFixed\(origin \+ new Vector3\(([^)]+)\)',source)[1])
     size = re.search(name+r' = new WorldPanel\(root, "[^"]+", ([\d.]+)f, ([\d.]+)f, ([\d.]+)f',source)
     width,height,units = map(float,size.groups()); boards[name] = box(position,(width+18)*units,(height+18)*units)
 # Read the ingredient row and its label dimensions; offsets follow the runtime branch for ice/bottles.

@@ -35,13 +35,13 @@ with tempfile.TemporaryDirectory(prefix='bartender-spatial-') as temporary:
     common = ['/nologo', '/langversion:9.0', '/nullable:disable', '/nostdlib+']
     common += [f'/reference:{p}' for p in reference.glob('*.dll')]
     common += [f'"{p}"' for p in sources] + [f'"{Path(__file__).with_name("UnityApiShims.cs")}"']
-    for name, symbols, executable in [('Checks', '', True), ('WebInput', 'UNITY_WEBGL,ENABLE_INPUT_SYSTEM', False)]:
+    for name, symbols, executable in [('Checks', '', True), ('WebChecks', 'UNITY_WEBGL,ENABLE_INPUT_SYSTEM', True)]:
         arguments = common + [f'/target:{"exe" if executable else "library"}', f'/out:{output/name}.dll']
         if symbols: arguments.append('/define:'+symbols)
         if executable: arguments.append(f'"{Path(__file__).with_name("Checks.cs")}"')
         response = output/(name+'.rsp'); response.write_text('\n'.join(arguments))
         subprocess.run([str(dotnet), str(csc), '@'+str(response)], check=True, cwd=root, env=environment)
         print('PASS: C# API-shim compilation for '+name+' (not a Unity compile).', flush=True)
-    (output/'Checks.runtimeconfig.json').write_text(json.dumps({'runtimeOptions': {'tfm': reference.name, 'framework': {'name': 'Microsoft.NETCore.App', 'version': pack.name}}}))
-    subprocess.run([str(dotnet), str(output/'Checks.dll')], check=True, cwd=root, env=environment)
+        (output/(name+'.runtimeconfig.json')).write_text(json.dumps({'runtimeOptions': {'tfm': reference.name, 'framework': {'name': 'Microsoft.NETCore.App', 'version': pack.name}}}))
+        subprocess.run([str(dotnet), str(output/(name+'.dll'))], check=True, cwd=root, env=environment)
 print('Unity rendering, real physics, Mac compilation, Web build and headset comfort still need testing in Unity.', flush=True)

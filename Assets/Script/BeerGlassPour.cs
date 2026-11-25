@@ -899,7 +899,7 @@ public class BeerGlassPour : MonoBehaviour
         if (TaskCompleted && recipeCards != null && recipeCards.TryGetFocusPoint(out Vector3 focus))
         {
             if (cocktailBoard == null) cocktailBoard = new WorldPanel(gameObject, "CocktailTable_TrainingRecord", 650f, 440f, 0.0018f);
-            cocktailBoard.Pose(new Vector3(focus.x + 2f, 2.20f, focus.z + 0.48f), playerCamera);
+            cocktailBoard.PoseFixed(new Vector3(focus.x + 2f, 2.20f, focus.z + 0.48f), Quaternion.identity, playerCamera);
             cocktailBoard.Begin();
             cocktailBoard.Text(new Rect(20f, 16f, 610f, 42f), "COCKTAIL TRAINING", 31, WorldPanel.Accent, TextAnchor.UpperLeft, true);
             for (int recipe = 0; recipe < 3; recipe++)
@@ -950,7 +950,7 @@ public class BeerGlassPour : MonoBehaviour
         night = new NightService(this);
         // OPEN 클릭은 메뉴를 닫고 즉시 일인칭 마우스 시점으로 돌아갑니다. 전환용 입력 잠금은 없습니다.
         Cursor.lockState = CursorLockMode.Locked; Cursor.visible = false;
-        ShowAction("LEVEL 1 / Week day (easy)", "Handle 10 customers. Follow the quick notes for ID checks and alcohol refusals.", 4f);
+        ShowAction("BAR OPEN", "Week day (easy): handle 10 customers. Read the service notes beside the counter.", 4f);
     }
 
     void BeginPractice(int recipe)
@@ -1178,7 +1178,7 @@ public class BeerGlassPour : MonoBehaviour
                 if (tools[index] == null || held == index) { if (toolLabels[index] != null) toolLabels[index].Hide(); continue; }
                 if (toolLabels[index] == null) toolLabels[index] = new WorldPanel(owner.gameObject, "CocktailTool_Label_" + index, 290f, 105f, 0.001f);
                 WorldPanel label = toolLabels[index];
-                label.Pose(tools[index].transform.position + Vector3.up * (heights[index] + 0.10f), owner.playerCamera);
+                label.PoseFixed(tools[index].transform.position + Vector3.up * (heights[index] + 0.10f), Quaternion.identity, owner.playerCamera);
                 label.Begin(); label.Text(new Rect(10f, 8f, 270f, 89f), names[index], 27, null, TextAnchor.MiddleCenter, true); label.End();
             }
         }
@@ -1539,6 +1539,7 @@ public class BeerGlassPour : MonoBehaviour
             BeginNightTransition(); ShuffleEncounters();
             owner.ResetServiceGlasses();
             if (owner.serviceMarker != null) owner.serviceMarker.SetActive(false);
+            CreateOpenSignStand();
             state = State.Waiting; deadline = Time.unscaledTime + 5f;
         }
 
@@ -1766,8 +1767,7 @@ public class BeerGlassPour : MonoBehaviour
                     completedGuests++;
                     if (completedGuests >= CustomerLimit)
                     {
-                        state = State.Completed;
-                        owner.ShowAction("LEVEL 1 COMPLETE", "Week day (easy): all 10 customers handled.", 5f);
+                        FinishShift();
                     }
                     else
                     {
@@ -1819,6 +1819,7 @@ public class BeerGlassPour : MonoBehaviour
             if (state != State.Screening) return;
             if (kind != GuestKind.Regular)
             {
+                unsafeSaleChoices++;
                 DecisionError(kind == GuestKind.CheckID ? "This customer is under 18. Verify age and refuse alcohol service."
                     : "This customer is intoxicated. Alcohol service should be refused.");
                 return;
@@ -1830,7 +1831,7 @@ public class BeerGlassPour : MonoBehaviour
         private void RefuseService(bool ageReason)
         {
             if (state != State.Screening) return;
-            if (ageReason && !idChecked) { idChecked = true; return; }
+            if (ageReason && !idChecked) { idChecked = true; idChecks++; return; }
             bool correctReason = ageReason ? kind == GuestKind.CheckID : kind == GuestKind.Intoxicated;
             if (!correctReason)
             {
@@ -1838,6 +1839,7 @@ public class BeerGlassPour : MonoBehaviour
                     : "Intoxication was not the correct refusal reason for this customer.");
                 return;
             }
+            if (ageReason) ageRefusals++; else intoxicationRefusals++;
             guideRefusalComplete = true;
             CloseDialog(); refusedCount++; order = -1; state = State.Leaving; atAisle = false;
             deadline = Time.unscaledTime + 2f;
@@ -1848,6 +1850,7 @@ public class BeerGlassPour : MonoBehaviour
         private void DecisionError(string reason)
         {
             if (state != State.Screening) return;
+            decisionErrors++;
             CloseDialog(); missedCount++; order = -1; state = State.Leaving; atAisle = false;
             deadline = Time.unscaledTime + 2f;
             SetCaption("SERVICE DECISION FAILED");
@@ -1885,6 +1888,7 @@ public class BeerGlassPour : MonoBehaviour
             }
             else
             {
+                failedDrinkOrders++;
                 missedCount++; state = State.Leaving; atAisle = false; deadline = Time.unscaledTime + 2f;
                 SetCaption("ORDER CANCELLED");
                 owner.ShowAction("ORDER FAILED", "This was your only attempt. No drink served. Wait for the next customer.", 4f);
@@ -1919,11 +1923,105 @@ public class BeerGlassPour : MonoBehaviour
                 ? "Correct glass\nE at the tap\nLEFT CLICK to serve"
                 : "Cocktail station\n45 seconds / one attempt\nMake the drink, then SERVE", 24);
         }
+        private int idChecks, ageRefusals, intoxicationRefusals, failedDrinkOrders, decisionErrors, unsafeSaleChoices;
+        private WorldPanel openSign, evaluationBoard;
+        private ShiftEvaluation evaluation;
+        private sealed class ShiftEvaluation
+        {
+            public readonly int Handled, Served, AgeRefusals, IntoxicationRefusals, FailedDrinks, DecisionErrors, UnsafeChoices, IdChecks;
+            public int Correct => Served + AgeRefusals + IntoxicationRefusals;
+            public int Score => Mathf.Clamp(Correct * 100 / CustomerLimit, 0, 100);
+            public bool SafeService => UnsafeChoices == 0;
+            public bool Cleared => Handled >= CustomerLimit && Score >= 70 && SafeService;
+            public string Grade => !SafeService ? "D" : Score >= 90 ? "A" : Score >= 80 ? "B" : Score >= 70 ? "C" : "D";
+            public string Advice => !SafeService ? "Check age and intoxication before accepting an alcohol order."
+                : FailedDrinks > 0 ? "Practise accurate recipes and the 45-second order limit."
+                : DecisionErrors > 0 ? "Review when to sell, check ID or refuse service."
+                : "Excellent shift. Keep up the safe and accurate service.";
+            public ShiftEvaluation(int handled, int served, int age, int intoxication, int failed, int decisions, int unsafeChoices, int checks)
+            {
+                Handled = handled; Served = served; AgeRefusals = age; IntoxicationRefusals = intoxication;
+                FailedDrinks = failed; DecisionErrors = decisions; UnsafeChoices = unsafeChoices; IdChecks = checks;
+            }
+        }
+        private void FinishShift()
+        {
+            if (state == State.Completed || completedGuests < CustomerLimit) return;
+            evaluation = new ShiftEvaluation(completedGuests, servedCount, ageRefusals, intoxicationRefusals,
+                failedDrinkOrders, decisionErrors, unsafeSaleChoices, idChecks);
+            state = State.Completed; easyGuideVisible = false;
+            CloseDialog();
+            if (owner.serviceMarker != null) owner.serviceMarker.SetActive(false);
+            owner.ShowAction(evaluation.Cleared ? "EASY MODE CLEARED" : "EASY SHIFT FINISHED",
+                "Review your evaluation sheet at the serving counter.", 5f);
+            if (owner.sounds != null) owner.sounds.PlayResult(evaluation.Cleared);
+        }
+        private void CreateOpenSignStand()
+        {
+            Bounds bar = owner.serviceDesk.bounds;
+            Part("OpenSign_Base", PrimitiveType.Cube, root.transform, new Vector3(bar.center.x, bar.max.y + 0.02f, bar.center.z), new Vector3(0.28f, 0.04f, 0.18f), dark);
+            float top = 1.94f;
+            Part("OpenSign_Post", PrimitiveType.Cube, root.transform, new Vector3(bar.center.x, (bar.max.y + top) * 0.5f, bar.center.z + 0.04f), new Vector3(0.035f, Mathf.Max(0.05f, top - bar.max.y), 0.035f), dark);
+        }
+        private void DrawOpenSign()
+        {
+            if (openSign == null) openSign = new WorldPanel(owner.gameObject, "Counter_PhysicalOpenSign", 620f, 200f, 0.0016f);
+            Bounds bar = owner.serviceDesk.bounds;
+            openSign.PoseFixed(new Vector3(bar.center.x, 2.10f, bar.center.z), Quaternion.Euler(0f, 180f, 0f), owner.playerCamera);
+            openSign.Begin();
+            openSign.Text(new Rect(18f, 15f, 584f, 88f), state == State.Completed ? "SHIFT FINISHED" : "OPEN", 49, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
+            openSign.Text(new Rect(18f, 123f, 584f, 57f), "LEVEL 1 / Week day (easy)", 28, null, TextAnchor.MiddleCenter);
+            openSign.End();
+        }
+        private void DrawEvaluation()
+        {
+            if (evaluation == null) return;
+            if (evaluationBoard == null)
+            {
+                evaluationBoard = new WorldPanel(owner.gameObject, "Counter_ShiftEvaluationStand", 960f, 760f, 0.0018f);
+                Vector3 anchor = EvaluationPosition();
+                Part("EvaluationStand_Post", PrimitiveType.Cube, root.transform, new Vector3(anchor.x, 0.72f, anchor.z + 0.06f), new Vector3(0.045f, 1.44f, 0.045f), dark);
+            }
+            evaluationBoard.PoseFixed(EvaluationPosition(), Quaternion.Euler(0f, 180f, 0f), owner.playerCamera);
+            evaluationBoard.Begin();
+            Color resultColor = evaluation.Cleared ? WorldPanel.Accent : new Color(1f, 0.65f, 0.35f);
+            evaluationBoard.Text(new Rect(24f, 16f, 912f, 45f), "WEEK DAY (EASY) / SHIFT COMPLETE", 34, null, TextAnchor.MiddleCenter, true);
+            evaluationBoard.Text(new Rect(24f, 76f, 912f, 55f), evaluation.Cleared ? "EASY MODE CLEARED" : "REVIEW NEEDED", 42, resultColor, TextAnchor.MiddleCenter, true);
+            evaluationBoard.Text(new Rect(24f, 151f, 460f, 60f), "SCORE  " + evaluation.Score + " / 100", 42, resultColor, TextAnchor.MiddleLeft, true);
+            evaluationBoard.Text(new Rect(548f, 151f, 388f, 60f), "GRADE  " + evaluation.Grade, 42, resultColor, TextAnchor.MiddleLeft, true);
+            string[] labels = { "Customers handled", "Drinks served", "Correct ID refusals", "Intoxication refusals", "ID checks performed", "Failed drink orders", "Decision errors", "Unsafe sale choices" };
+            string[] values = { evaluation.Handled + " / " + CustomerLimit, evaluation.Served.ToString(), evaluation.AgeRefusals.ToString(), evaluation.IntoxicationRefusals.ToString(), evaluation.IdChecks.ToString(), evaluation.FailedDrinks.ToString(), evaluation.DecisionErrors.ToString(), evaluation.UnsafeChoices.ToString() };
+            for (int row = 0; row < labels.Length; row++)
+            {
+                evaluationBoard.Text(new Rect(24f, 239f + row * 43f, 350f, 37f), labels[row], 24);
+                evaluationBoard.Text(new Rect(392f, 239f + row * 43f, 125f, 37f), values[row], 25, WorldPanel.Accent);
+            }
+            evaluationBoard.Check(new Rect(548f, 239f, 388f, 69f), "10 customers completed", evaluation.Handled >= CustomerLimit);
+            evaluationBoard.Check(new Rect(548f, 335f, 388f, 69f), "No unsafe sale choices", evaluation.SafeService);
+            evaluationBoard.Check(new Rect(548f, 431f, 388f, 69f), "Accuracy at least 70%", evaluation.Score >= 70);
+            evaluationBoard.Text(new Rect(548f, 530f, 388f, 80f), "Correctly handled: " + evaluation.Correct + " / " + CustomerLimit, 26);
+            evaluationBoard.Text(new Rect(24f, 637f, 912f, 81f), "Clear: 70+ points and zero unsafe sale choices.\n" + evaluation.Advice, 24);
+            evaluationBoard.Progress(new Rect(24f, 733f, 912f, 7f), evaluation.Score / 100f);
+            evaluationBoard.End();
+        }
+        private Vector3 EvaluationPosition()
+        {
+            return new Vector3(owner.serviceMarker.transform.position.x, 2.10f, owner.serviceDesk.bounds.min.z - 0.60f);
+        }
+
         public void Draw()
         {
             if (disposed) return;
+            DrawOpenSign();
+            if (state == State.Completed)
+            {
+                if (statusBoard != null) statusBoard.Hide(); if (decisionBoard != null) decisionBoard.Hide();
+                if (ticketBoard != null) ticketBoard.Hide(); if (guideBoard != null) guideBoard.Hide();
+                DrawEvaluation(); return;
+            }
+            if (evaluationBoard != null) evaluationBoard.Hide();
             if (statusBoard == null) statusBoard = new WorldPanel(owner.gameObject, "NightService_ShiftBoard", 740f, 400f, 0.0019f);
-            statusBoard.Pose(owner.serviceDesk.bounds.center + new Vector3(-2.5f, 1.1f, 0f), owner.playerCamera); statusBoard.Begin();
+            statusBoard.PoseFixed(owner.serviceDesk.bounds.center + new Vector3(1.4f, 1.1f, 0f), Quaternion.Euler(0f, 180f, 0f), owner.playerCamera); statusBoard.Begin();
             statusBoard.Text(new Rect(22f, 18f, 696f, 38f), "LEVEL 1 / Week day (easy)", 35, WorldPanel.Accent, TextAnchor.UpperLeft, true);
             statusBoard.Text(new Rect(22f, 80f, 696f, 43f), "Customers: " + completedGuests + " / " + CustomerLimit + "   Served " + servedCount + "   Refused " + refusedCount + "   Missed " + missedCount, 25);
             string message = state == State.Completed ? "LEVEL 1 COMPLETE\nAll 10 customers handled."
@@ -1962,12 +2060,14 @@ public class BeerGlassPour : MonoBehaviour
         }
         public void HideUI()
         {
+            if (openSign != null) openSign.Hide(); if (evaluationBoard != null) evaluationBoard.Hide();
             if (statusBoard != null) statusBoard.Hide(); if (decisionBoard != null) decisionBoard.Hide();
             if (guideBoard != null) guideBoard.Hide(); if (ticketBoard != null) ticketBoard.Hide();
         }
 
         public void Dispose()
         {
+        if (openSign != null) openSign.Dispose(); if (evaluationBoard != null) evaluationBoard.Dispose();
         if (statusBoard != null) statusBoard.Dispose(); if (decisionBoard != null) decisionBoard.Dispose();
         if (guideBoard != null) guideBoard.Dispose(); if (ticketBoard != null) ticketBoard.Dispose();
             if (disposed) return; disposed = true; CloseDialog();
@@ -2116,7 +2216,7 @@ public class BeerGlassPour : MonoBehaviour
             if (sourceMovement != null) sourceMovement.enabled = false;
             if (owner.uniform != null) owner.uniform.enabled = false;
             camera.enabled = true;
-            Cursor.lockState = CursorLockMode.None;
+            Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
             IsActive = true;
             ResetRound();
@@ -2370,7 +2470,7 @@ public class BeerGlassPour : MonoBehaviour
             iceEffects.Clear();
             for (int index = 0; index < fills.Length; index++) { levels[index] = 0f; fills[index].SetActive(false); }
             foreach (GameObject ring in rings) ring.SetActive(false);
-            ReturnTool();
+            ReturnTool(); gestureReleaseRequired = false;
             shakerLid.SetActive(false);
             phase = Phase.ChooseGlass; selectedGlass = -1;
             System.Array.Clear(ingredientTotals, 0, ingredientTotals.Length);
@@ -2591,6 +2691,7 @@ public class BeerGlassPour : MonoBehaviour
         private void ReturnTool()
         {
             if (owner.sounds != null) owner.sounds.StopContinuous();
+            if (toolHeld && LeftHeld()) gestureReleaseRequired = true;
             toolHeld = false; toolOffset = 0f;
             if (stirrer != null) { stirrer.transform.localPosition = stirStart; stirrer.transform.localRotation = Quaternion.identity; }
             if (shaker != null) { shaker.transform.localPosition = shakerStart; shaker.transform.localRotation = Quaternion.identity; }
@@ -2617,11 +2718,8 @@ public class BeerGlassPour : MonoBehaviour
 
         private Vector2 Pointer()
         {
-#if ENABLE_INPUT_SYSTEM
-            return Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
-#else
-            return Input.mousePosition;
-#endif
+            // The practice station uses a gaze ray, matching its spatial buttons and visible ray tip.
+            return new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
         }
         private Vector2 PointerDelta()
         {
@@ -2684,7 +2782,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             if (!pouring && Time.unscaledTime >= noticeUntil) { if (feedbackBoard != null) feedbackBoard.Hide(); return; }
             if (feedbackBoard == null) feedbackBoard = new WorldPanel(root, "Practice_ActionReceipt", 740f, 160f, 0.0024f, Layer);
-            feedbackBoard.Pose(origin + new Vector3(0f, 1.86f, 2.43f), camera); feedbackBoard.Begin();
+            feedbackBoard.PoseFixed(origin + new Vector3(0f, 1.86f, 2.43f), Quaternion.identity, camera); feedbackBoard.Begin();
             Color accent = pouring || noticeSuccess ? WorldPanel.Accent : new Color(1f, 0.65f, 0.30f);
             string title = pouring ? "POURING / " + (pourObject != null ? pourObject.name : "DRINK")
                 : (noticeCelebrate ? "GOOD JOB! " : "") + noticeTitle;
@@ -2698,19 +2796,25 @@ public class BeerGlassPour : MonoBehaviour
         public void Tick()
         {
             if (!IsActive) return;
+            LookAround();
+            bool captured = false;
+            if (Application.isFocused && Cursor.lockState != CursorLockMode.Locked && owner.PressedLeftClick())
+            {
+                Cursor.lockState = CursorLockMode.Locked; Cursor.visible = false;
+                SpatialInput.TakeClick(); captured = true;
+            }
             if (owner.PressedRecipeClose()) { Exit(); return; }
             if (awaitingStart || failed || completed)
             {
-                LookAround();
                 if (owner.sounds != null) owner.sounds.StopContinuous();
                 return;
             }
             remaining = Mathf.Max(0f, remaining - Time.unscaledDeltaTime);
             if (remaining <= 0f) { Fail("Time's up!\nThe " + RoundSeconds.ToString("0") + "-second limit has expired."); return; }
+            if (captured) return;
             if (FinishRequested()) { TryFinish(); return; }
             if (!pouring && !toolHeld && MeasureSwitchRequested()) SetMeasure(measure == 1f ? 0.5f : 1f);
             if (pouring) { TickPour(); return; }
-            if (LookAround()) return;
             Vector2 pointer = Pointer();
             if (toolHeld)
             {
@@ -2899,7 +3003,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             HideWorkUI();
             if (resultBoard == null) resultBoard = new WorldPanel(root, "Practice_BriefingAndResultsStand", 960f, 600f, 0.0018f, Layer);
-            resultBoard.Pose(origin + new Vector3(0f, 1.60f, -0.10f), camera); resultBoard.Begin();
+            resultBoard.PoseFixed(origin + new Vector3(0f, 1.60f, -0.10f), Quaternion.identity, camera); resultBoard.Begin();
             string heading = awaitingStart ? "TRIAL " + (trial + 1) + " / " + trialNames[trial]
                 : failed ? serviceOrder ? "ORDER FAILED" : "TRY THIS TRIAL AGAIN"
                 : owner.AllTrialsComplete ? "ALL TRAINING COMPLETE" : "TRIAL " + (trial + 1) + " COMPLETE";
@@ -2908,7 +3012,7 @@ public class BeerGlassPour : MonoBehaviour
             if (awaitingStart)
             {
                 resultBoard.Text(new Rect(24f, 156f, 912f, 100f), trialDescriptions[trial], 28);
-                resultBoard.Text(new Rect(24f, 286f, 912f, 150f), "Time: " + RoundSeconds.ToString("0") + " seconds.\nAim at objects or their labels and LEFT CLICK. Flip the jigger with R.\nHold LEFT CLICK to stir / shake; hold RIGHT CLICK to look around.\nENTER submits the drink. ESC returns to the bar.", 26);
+                resultBoard.Text(new Rect(24f, 286f, 912f, 150f), "Time: " + RoundSeconds.ToString("0") + " seconds.\nAim with the centre pointer and LEFT CLICK. Flip the jigger with R.\nMove the mouse to look. Hold LEFT CLICK + move to stir / shake; release to look.\nENTER submits the drink. ESC returns to the bar.", 26);
             }
             else if (failed)
                 resultBoard.Text(new Rect(24f, 154f, 912f, 246f), error + (serviceOrder ? "\n\nOne attempt per order. Return to the bar for the next customer." : "\n\nThe trial was not checked. Retry with a fresh timer."), 29);
@@ -2946,7 +3050,7 @@ public class BeerGlassPour : MonoBehaviour
             if (resultBoard != null) resultBoard.Hide();
             UpdateSelectionVisuals();
             if (clockBoard == null) clockBoard = new WorldPanel(root, "Practice_PhysicalTimer", 300f, 164f, 0.0018f, Layer);
-            clockBoard.Pose(origin + new Vector3(-1.85f, 2.06f, 1.50f), camera); clockBoard.Begin();
+            clockBoard.PoseFixed(origin + new Vector3(-1.85f, 2.06f, 1.50f), Quaternion.identity, camera); clockBoard.Begin();
             clockBoard.Text(new Rect(14f, 10f, 272f, 30f), "ROUND CLOCK", 22, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
             clockBoard.Text(new Rect(14f, 49f, 272f, 64f), remaining.ToString("0.0") + " s", 49,
                 remaining <= 10f ? new Color(1f, 0.48f, 0.32f) : WorldPanel.Ink, TextAnchor.MiddleCenter, true);
@@ -2954,12 +3058,12 @@ public class BeerGlassPour : MonoBehaviour
             if (trial < 2 || serviceOrder)
             {
                 if (workBoard == null) workBoard = new WorldPanel(root, "Practice_WorkbenchRecipeBoard", 960f, 245f, 0.0024f, Layer);
-                workBoard.Pose(origin + new Vector3(0f, 2.42f, 2.43f), camera); workBoard.Begin();
+                workBoard.PoseFixed(origin + new Vector3(0f, 2.42f, 2.43f), Quaternion.identity, camera); workBoard.Begin();
                 workBoard.Text(new Rect(22f, 14f, 916f, 45f), recipeNames[recipe] + (serviceOrder ? " / CUSTOMER ORDER" : " / TRIAL " + (trial + 1)), 35, WorldPanel.Accent, TextAnchor.UpperLeft, true);
                 string guidance = trial == 0 ? NextInstruction() : "Glass: " + glassNames[recipe] + ". Choose the correct ingredients; recall the amounts.";
                 workBoard.Text(new Rect(22f, 79f, 916f, 91f), pouring ? "Pouring into the vessel..." : guidance, 30);
                 workBoard.Text(new Rect(22f, 188f, 916f, 40f), hovered >= 0 && !toolHeld ? "IN FOCUS: " + TargetName(hovered) + " / LEFT CLICK TO USE"
-                    : "LEFT CLICK to use  |  RIGHT CLICK + drag to look  |  ESC to leave", 24);
+                    : "MOUSE: LOOK  |  LEFT CLICK: USE  |  R: JIGGER  |  ESC: LEAVE", 24);
                 if (pouring) workBoard.Progress(new Rect(22f, 236f, 916f, 5f), pourTime / 0.45f);
                 else if (trial == 0 || serviceOrder) workBoard.Progress(new Rect(22f, 236f, 916f, 5f), phase == Phase.Stir || phase == Phase.Shake
                     ? strokes / 30f : (float)CompletedIngredientCount() / recipeIngredients[recipe].Length);
@@ -2969,7 +3073,7 @@ public class BeerGlassPour : MonoBehaviour
             if (trial < 2 || serviceOrder)
             {
                 if (controlsBoard == null) controlsBoard = new WorldPanel(root, "Practice_JiggerAndSubmissionStation", 440f, 310f, 0.0019f, Layer);
-                controlsBoard.Pose(origin + new Vector3(2.05f, 2.00f, 1.80f), camera); controlsBoard.Begin();
+                controlsBoard.PoseFixed(origin + new Vector3(2.05f, 2.00f, 1.80f), Quaternion.identity, camera); controlsBoard.Begin();
                 controlsBoard.Text(new Rect(16f, 12f, 408f, 32f), "JIGGER / R TO FLIP", 25, WorldPanel.Accent, TextAnchor.UpperLeft, true);
                 if (controlsBoard.Button(new Rect(16f, 58f, 196f, 59f), "0.5 oz", !pouring && !toolHeld, measure == 0.5f)) SetMeasure(0.5f);
                 if (controlsBoard.Button(new Rect(228f, 58f, 196f, 59f), "1 oz", !pouring && !toolHeld, measure == 1f)) SetMeasure(1f);
@@ -2988,7 +3092,7 @@ public class BeerGlassPour : MonoBehaviour
                 if (!targetBoards.TryGetValue(code, out WorldPanel label))
                 { label = new WorldPanel(root, "Practice_ObjectLabel_" + code, 360f, 176f, 0.00085f, Layer); targetBoards.Add(code, label); }
                 float offset = code >= 10 && code < 20 ? (code == 16 ? 0.25f : 0.60f) : code < 3 ? glassHeights[code] + 0.12f : code == 30 ? 0.46f : 0.45f;
-                label.Pose(labelAnchors[code] + Vector3.up * offset, camera); label.Begin();
+                label.PoseFixed(labelAnchors[code] + Vector3.up * offset, Quaternion.identity, camera); label.Begin();
                 bool clicked = label.Button(new Rect(4f, 4f, 352f, 168f), "", !pouring && !toolHeld && (code >= 3 || phase == Phase.ChooseGlass), code == selectedGlass || code == hovered);
                 label.Text(new Rect(14f, 10f, 332f, 94f), TargetName(code), 36, WorldPanel.Ink, TextAnchor.MiddleCenter, true);
                 label.Text(new Rect(14f, 116f, 332f, 48f), TargetStatus(code), 24, WorldPanel.Accent, TextAnchor.MiddleCenter);
@@ -2998,7 +3102,7 @@ public class BeerGlassPour : MonoBehaviour
             if (serviceOrder && owner.night != null)
             {
                 if (orderBoard == null) orderBoard = new WorldPanel(root, "Practice_PhysicalOrderTicket", 330f, 380f, 0.00165f, Layer);
-                orderBoard.Pose(origin + new Vector3(-1.45f, 1.27f, 0.62f), camera); orderBoard.Begin(); owner.night.DrawTicket(orderBoard); orderBoard.End();
+                orderBoard.PoseFixed(origin + new Vector3(-1.45f, 1.27f, 0.62f), Quaternion.identity, camera); orderBoard.Begin(); owner.night.DrawTicket(orderBoard); orderBoard.End();
             }
             DrawActionReceipt();
         }
@@ -3012,18 +3116,21 @@ public class BeerGlassPour : MonoBehaviour
             foreach (WorldPanel board in targetBoards.Values) board.Dispose();
             targetBoards.Clear();
         }
-        private bool LookAround()
+        private bool gestureReleaseRequired;
+        private void LookAround()
         {
-#if ENABLE_INPUT_SYSTEM
-            bool held = Mouse.current != null && Mouse.current.rightButton.isPressed;
-#else
-            bool held = Input.GetMouseButton(1);
-#endif
-            if (!held) return false;
-            Vector2 delta = PointerDelta(); lookYaw += delta.x * 0.12f; lookPitch = Mathf.Clamp(lookPitch - delta.y * 0.12f, -65f, 65f);
+            if (!Application.isFocused) return;
+            // Mouse movement always looks; only an active left-drag technique owns the delta.
+            if (gestureReleaseRequired)
+            {
+                if (LeftHeld()) return;
+                gestureReleaseRequired = false;
+            }
+            if (toolHeld && LeftHeld()) return;
+            Vector2 delta = PointerDelta();
+            lookYaw += delta.x * 0.12f;
+            lookPitch = Mathf.Clamp(lookPitch - delta.y * 0.12f, -65f, 65f);
             camera.transform.localRotation = Quaternion.Euler(lookPitch, lookYaw, 0f);
-            if (owner.sounds != null) owner.sounds.PauseContinuous();
-            return true;
         }
 
         public void Dispose()
@@ -3219,8 +3326,8 @@ public class BeerGlassPour : MonoBehaviour
         {
             if (!IsOpen) { if (recipeBoard != null) recipeBoard.Hide(); return; }
             if (recipeBoard == null) recipeBoard = new WorldPanel(owner.gameObject, "CocktailRecipe_ReadingStand", 960f, 640f, 0.00175f);
-            Vector3 position = notes[selected].transform.position;
-            recipeBoard.Pose(new Vector3(position.x, 1.94f, position.z + 0.50f), owner.playerCamera);
+            Vector3 position = notes[1].transform.position; // One physical reading stand for all three pages.
+            recipeBoard.PoseFixed(new Vector3(position.x, 1.94f, position.z + 0.50f), Quaternion.identity, owner.playerCamera);
             recipeBoard.Begin();
             recipeBoard.Text(new Rect(24f, 17f, 730f, 45f), titles[selected], 39, WorldPanel.Accent, TextAnchor.UpperLeft, true);
             if (recipeBoard.Button(new Rect(800f, 16f, 136f, 48f), "CLOSE")) { Close(); recipeBoard.End(); return; }
@@ -3493,6 +3600,12 @@ internal sealed class WorldPanel : System.IDisposable
             root.transform.rotation = !Visible ? facing : Quaternion.RotateTowards(root.transform.rotation, facing, 180f * Time.unscaledDeltaTime);
         }
     }
+    public void PoseFixed(Vector3 worldPosition, Quaternion worldRotation, Camera camera)
+    {
+        if (disposed || root == null || camera == null) return;
+        viewer = camera; root.GetComponent<Canvas>().worldCamera = camera;
+        root.transform.position = worldPosition; root.transform.rotation = worldRotation;
+    }
     public void Begin()
     {
         if (!Visible) shownFrame = Time.frameCount;
@@ -3613,7 +3726,7 @@ internal static class SpatialInput
     public static bool Consumed => consumedFrame == Time.frameCount;
     public static Ray Ray(Camera camera)
     {
-        if (Cursor.lockState == CursorLockMode.Locked) return camera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
+        if (Cursor.lockState == CursorLockMode.Locked || camera.gameObject.layer == 30) return camera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
 #if ENABLE_INPUT_SYSTEM
         Vector2 pointer = Mouse.current != null ? Mouse.current.position.ReadValue() : new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
 #else

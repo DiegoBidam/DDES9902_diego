@@ -78,7 +78,7 @@ static class Validation {
    EnumField(night,"kind",kind);EnumField(night,"state","Screening");Set(night,"easyGuideVisible",kind!="Regular");Set(night,"order",0);Call(night,"OpenDialog");Call(night,"Draw");Check(Get(night,"decisionBoard")!=null,"Customer choices use world board");Check(Cursor.lockState==CursorLockMode.Locked,"Customer dialogue preserves look input");if(kind!="Regular")Check(((WorldPanel)Get(night,"guideBoard")).Visible,"Easy guide is a visible world note");Call(night,"CloseDialog");
   }
   foreach(int drink in new[]{0,1,2,3,4}){Set(night,"order",drink);EnumField(night,"state","Preparing");Call(night,"Draw");Check(((WorldPanel)Get(night,"ticketBoard")).Visible,"World ticket persists during each order");}
-  Call(night,"HideUI");Check(!((WorldPanel)Get(night,"statusBoard")).Visible,"Main night boards hidden during practice");EnumField(night,"state","Completed");Call(night,"Draw");Check(((WorldPanel)Get(night,"statusBoard")).Visible,"End of shift result remains in world");Call(night,"Dispose");
+  Call(night,"HideUI");Check(!((WorldPanel)Get(night,"statusBoard")).Visible,"Main night boards hidden during practice");Set(night,"completedGuests",10);EnumField(night,"state","Leaving");Call(night,"FinishShift");Call(night,"Draw");Check(((WorldPanel)Get(night,"evaluationBoard")).Visible,"End of shift result remains in world");Call(night,"Dispose");
   var table=new GameObject("Table").AddComponent<BoxCollider>();table.size=new Vector3(5,.1f,.95f);table.center=Vector3.zero;table.transform.position=new Vector3(40,1.2f,3.8f);var cards=Nested("RecipeCards",owner,table);Set(owner,"recipeCards",cards);
   foreach(int recipe in new[]{0,1,2})foreach(int tab in new[]{0,1}){Set(cards,"selected",recipe);Set(cards,"contentTab",tab);Call(cards,"DrawOverlay");Check(((WorldPanel)Get(cards,"recipeBoard")).Visible,"All recipe tabs render on world reading stand");}
   Call(cards,"Close");Check(!((WorldPanel)Get(cards,"recipeBoard")).Visible,"Closed card releases world panel");Set(uniform,"shiftStarted",true);Set(owner,"night",null);Call(owner,"DrawWorldUI");Check(((WorldPanel)Get(owner,"beerBoard")).Visible,"Beer status uses a world placard");var served=(bool[])Get(owner,"served");served[0]=served[1]=true;Call(owner,"DrawWorldUI");Check(((WorldPanel)Get(owner,"cocktailBoard")).Visible,"Training progress uses world checklist");
@@ -94,5 +94,80 @@ static class Validation {
   var initialScale=point.transform.localScale.x;Input.Click=true;pointer.Tick(cam,true);Check(point.transform.localScale.x>initialScale,"Interactive click visibly pulses pointer");
   panel.Hide();pointer.Tick(cam);Check(!point.activeSelf,"Pointer hidden without a surface hit");pointer.Dispose();panel.Dispose();Input.Click=false;
  }
- public static void Main(){SpatialButtons();PointerVisibility();PracticeUIAndRules();StationAndCustomerBoards();Console.WriteLine("PASS "+checks+" spatial input, UI state and recipe checks with Unity API shims; no Unity rendering or physics executed.");}
+ static object Property(object o,string name)=>o.GetType().GetProperty(name,BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance).GetValue(o);
+ static void MouseDelta(float x,float y,bool held=false){
+  Input.Click=false;Input.AxisX=x/18f;Input.AxisY=y/18f;Input.MouseHeld=held;
+  UnityEngine.InputSystem.Mouse.current??=new UnityEngine.InputSystem.Mouse();
+  UnityEngine.InputSystem.Mouse.current.delta.value=new Vector2(x,y);
+  UnityEngine.InputSystem.Mouse.current.leftButton.isPressed=held;
+ }
+ static void FreeLookAndWorldSigns(){
+  var go=new GameObject("LookPlayer");var owner=go.AddComponent<BeerGlassPour>();Set(owner,"uniform",go.AddComponent<UniformInteraction>());owner.playerCamera=new GameObject("MainCamera").AddComponent<Camera>();
+  Application.isFocused=true;MouseDelta(0,0);var practice=Practice(owner,0);var cam=(Camera)Property(practice,"ViewCamera");
+  Check(Cursor.lockState==CursorLockMode.Locked,"Practice begins with first-person pointer capture");
+  float yaw=(float)Get(practice,"lookYaw"),pitch=(float)Get(practice,"lookPitch"),remaining=(float)Get(practice,"remaining");var forward=cam.transform.forward;
+  MouseDelta(20,10);Call(practice,"Tick");
+  Check((float)Get(practice,"lookYaw")>yaw&&(float)Get(practice,"lookPitch")<pitch,"Mouse moves camera with no right button, including briefing");
+  Check((cam.transform.forward-forward).sqrMagnitude>.0001f,"Look delta rotates the camera, not a UI transform");
+  Check((float)Get(practice,"remaining")==remaining,"Briefing look does not start the timer");
+  Set(practice,"awaitingStart",false);MouseDelta(0,0);Time.frameCount++;Call(practice,"Draw");
+  var panel=(WorldPanel)Get(practice,"workBoard");var boardRoot=(GameObject)Get(panel,"root");var position=boardRoot.transform.position;var orientation=boardRoot.transform.rotation;
+  MouseDelta(25,5);Call(practice,"Tick");Time.frameCount++;Call(practice,"Draw");
+  Check(boardRoot.transform.position==position&&boardRoot.transform.rotation.y==orientation.y,"Looking leaves cocktail information fixed in the world");
+  var pointer=(Vector2)Call(practice,"Pointer");Check(pointer.x==Screen.width*.5f&&pointer.y==Screen.height*.5f,"Selection ray uses the centre, not a free OS cursor");
+  Cursor.lockState=CursorLockMode.None;Input.mousePosition=new Vector3(10,10,0);UnityEngine.InputSystem.Mouse.current.position.value=new Vector2(10,10);
+  Check(Vector3.Dot(SpatialInput.Ray(cam).direction,cam.transform.forward)>.999f,"Uncaptured Web pointer still uses the practice gaze ray");Cursor.lockState=CursorLockMode.Locked;
+  Set(practice,"toolHeld",true);MouseDelta(50,40,true);yaw=(float)Get(practice,"lookYaw");Call(practice,"LookAround");Check((float)Get(practice,"lookYaw")==yaw,"Technique drag owns mouse delta without moving view");
+  Set(practice,"toolHeld",false);Set(practice,"gestureReleaseRequired",true);Call(practice,"LookAround");Check((float)Get(practice,"lookYaw")==yaw,"Completed gesture cannot kick the camera while button stays held");
+  MouseDelta(20,0,false);Call(practice,"LookAround");Check((float)Get(practice,"lookYaw")>yaw,"Releasing the tool gesture resumes ordinary mouse look");
+  Application.isFocused=false;yaw=(float)Get(practice,"lookYaw");Call(practice,"LookAround");Check((float)Get(practice,"lookYaw")==yaw,"Background window cannot rotate camera");Application.isFocused=true;
+  MouseDelta(0,0);Call(practice,"SelectTarget",0);Call(practice,"AddIngredient",1);remaining=(float)Get(practice,"remaining");yaw=(float)Get(practice,"lookYaw");MouseDelta(15,0);Call(practice,"Tick");
+  Check((float)Get(practice,"lookYaw")>yaw&&(float)Get(practice,"pourTime")>0,"View remains free while a drink pours");
+  Check((float)Get(practice,"remaining")<remaining,"Mouse look never pauses an active trial timer");Call(practice,"Dispose");MouseDelta(0,0);
+  var viewer=new GameObject("Viewer").AddComponent<Camera>();viewer.transform.position=new Vector3(0,1.7f,0);var fixedPanel=new WorldPanel(go,"PhysicalSign",400,200);var anchor=new Vector3(0,1.7f,2);
+  fixedPanel.PoseFixed(anchor,Quaternion.identity,viewer);fixedPanel.Begin();fixedPanel.Text(new Rect(10,10,380,180),"IN THE WORLD");fixedPanel.End();
+  viewer.transform.position=new Vector3(1,1.7f,0);viewer.transform.rotation=Quaternion.LookRotation(Vector3.right);fixedPanel.PoseFixed(anchor,Quaternion.identity,viewer);var fixedRoot=(GameObject)Get(fixedPanel,"root");
+  Check(fixedRoot.transform.position==anchor&&fixedRoot.transform.rotation.y==0&&fixedRoot.transform.parent==null,"Physical sign cannot follow head movement or viewer translation");
+  Check(!WorldPanel.TryPointerHit(viewer,out var unused),"Turning away leaves the placard outside the gaze ray");fixedPanel.Dispose();
+ }
+ static object ServiceSession(out BeerGlassPour owner){
+  var go=new GameObject("ShiftPlayer");owner=go.AddComponent<BeerGlassPour>();owner.playerCamera=new GameObject("MainCamera").AddComponent<Camera>();Set(owner,"uniform",go.AddComponent<UniformInteraction>());
+  var desk=new GameObject("Counter").AddComponent<BoxCollider>();desk.bounds=new Bounds(new Vector3(40,1,1.6f),new Vector3(10,.15f,1.3f));Set(owner,"serviceDesk",desk);
+  var marker=new GameObject("Serve");marker.transform.position=new Vector3(43,1.09f,1.27f);Set(owner,"serviceMarker",marker);
+  var session=Nested("NightService",owner);Set(owner,"night",session);return session;
+ }
+ static void ShiftEvaluationScenarios(){
+  // S=served; A=correct age refusal; I=correct intoxication refusal; F=failed drink; D=wrong refusal; U=unsafe sale choice.
+  string[] sessions={"SSSSSSSSAI","SSSSSSSSSD","SSSSSSSSDD","SSSSSSADDD","SSSSSSFFFF","SSSSSSSSSU"};
+  int[] scores={100,90,80,70,60,90};string[] grades={"A","A","B","C","D","D"};
+  for(int test=0;test<sessions.Length;test++){
+   var session=ServiceSession(out var owner);Call(session,"Draw");var sign=(WorldPanel)Get(session,"openSign");var signRoot=(GameObject)Get(sign,"root");var signPosition=signRoot.transform.position;var signRotation=signRoot.transform.rotation;
+   owner.playerCamera.transform.position=new Vector3(42,1.77f,2.8f);owner.playerCamera.transform.rotation=Quaternion.LookRotation(Vector3.right);Call(session,"Draw");
+   Check(signRoot.transform.position==signPosition&&signRoot.transform.rotation.y==signRotation.y&&signRoot.transform.parent==null,"Open announcement is a physical counter sign, never head-fixed");
+   Check(signRoot.GetComponent<Canvas>().renderMode==RenderMode.WorldSpace,"Open sign uses WorldSpace rendering");
+   Set(session,"completedGuests",9);Call(session,"FinishShift");Check(Get(session,"evaluation")==null,"Report cannot finish before 10 customers");
+   int finished=0;
+   foreach(char action in sessions[test]){
+    EnumField(session,"state","Screening");EnumField(session,"kind",action=='A'||action=='U'?"CheckID":action=='I'?"Intoxicated":"Regular");Set(session,"order",action=='F'?2:0);Set(session,"idChecked",false);
+    if(action=='A'){Call(session,"RefuseService",true);Call(session,"RefuseService",true);}
+    else if(action=='I'||action=='D')Call(session,"RefuseService",false);
+    else {Call(session,"AcceptOrder");if(action=='S')Call(session,"CompleteBeer");else if(action=='F')Call(session,"CompleteCocktail",false);}
+    finished++;Set(session,"completedGuests",finished);
+   }
+   // The last guest exits through the real NightService.Tick completion path.
+   var lastGuest=new GameObject("LastGuest");lastGuest.transform.position=(Vector3)Get(session,"entrance");Set(session,"guest",lastGuest);Set(session,"completedGuests",9);Set(session,"atAisle",true);Set(session,"deadline",0f);EnumField(session,"state","Leaving");Time.unscaledTime=1f;
+   Call(session,"Tick");var result=Get(session,"evaluation");Check(result!=null,"The tenth guest exiting produces the evaluation through Tick");
+   Check((int)Property(result,"Score")==scores[test],"Score comes from successful serving and correct refusals");Check((string)Property(result,"Grade")==grades[test],"Grade follows accuracy and safety override");
+   Check((bool)Property(result,"Cleared")== (test<4),"70+ accuracy clears only with no unsafe sale choices");
+   Check((int)Get(session,"servedCount")+(int)Get(session,"refusedCount")+(int)Get(session,"missedCount")==10,"Each encounter contributes exactly one outcome");
+   if(test==0)Check((int)Get(session,"ageRefusals")==1&&(int)Get(session,"intoxicationRefusals")==1&&(int)Get(session,"idChecks")==1,"ID and intoxication decisions are tracked separately");
+   if(test==4)Check((int)Get(session,"failedDrinkOrders")==4&&(int)Get(session,"decisionErrors")==0,"Drink failures remain separate from decision errors");
+   if(test==5)Check((int)Get(session,"unsafeSaleChoices")==1&&(int)Get(session,"decisionErrors")==1,"An unsafe choice is recorded once and blocks clearance");
+   Call(session,"Draw");var report=(WorldPanel)Get(session,"evaluationBoard");var reportRoot=(GameObject)Get(report,"root");Check(report.Visible&&reportRoot.GetComponent<Canvas>().renderMode==RenderMode.WorldSpace&&reportRoot.transform.parent==null,"Final scorecard is a persistent world object");
+   var reportPosition=reportRoot.transform.position;owner.playerCamera.transform.position+=Vector3.right;Call(session,"Draw");Check(reportRoot.transform.position==reportPosition,"Final evaluation stays at the counter when player moves");
+   int frozen=(int)Property(result,"Score");Set(session,"servedCount",0);Call(session,"FinishShift");Check(ReferenceEquals(result,Get(session,"evaluation"))&&(int)Property(result,"Score")==frozen,"Report is snapshotted once and cannot double-count");
+   Call(session,"HideUI");Check(!sign.Visible&&!report.Visible,"Night UI hides cleanly for owner suspension");Call(session,"Dispose");
+  }
+ }
+ public static void Main(){SpatialButtons();PointerVisibility();PracticeUIAndRules();StationAndCustomerBoards();FreeLookAndWorldSigns();ShiftEvaluationScenarios();Console.WriteLine("PASS "+checks+" spatial input, UI state and recipe checks with Unity API shims; no Unity rendering or physics executed.");}
 }
