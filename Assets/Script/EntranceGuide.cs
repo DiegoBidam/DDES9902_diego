@@ -96,8 +96,8 @@ public class EntranceGuide : MonoBehaviour
         Camera camera = player.GetComponentInChildren<Camera>();
         if (camera == null) return;
         if (entranceBoard == null) entranceBoard = new WorldPanel(gameObject, "Entrance_InstructionPlaque", 620f, 170f, 0.0018f);
-        Vector3 anchor = entranceZone.bounds.center + new Vector3(-1.25f, 0f, 0.5f); anchor.y = 2.10f;
-        entranceBoard.Pose(anchor, camera); entranceBoard.Begin();
+        SpatialLayout.BeginContext(camera, "entrance");
+        entranceBoard.PoseAdaptive(camera, SpatialSlot.Primary); entranceBoard.Begin();
         entranceBoard.Text(new Rect(20f, 16f, 580f, 38f), "WELCOME / GET READY", 29, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
         entranceBoard.Text(new Rect(20f, 70f, 580f, 84f), "Let's get you ready. Put on your shirt first.", 28, null, TextAnchor.MiddleCenter);
         entranceBoard.End();

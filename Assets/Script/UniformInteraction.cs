@@ -486,11 +486,10 @@ public class UniformInteraction : MonoBehaviour
     private WorldPanel uniformBoard;
     private void DrawWorldUniform()
     {
-        if (shiftStarted || playerCamera == null) { if (uniformBoard != null) uniformBoard.Hide(); return; }
+        if (shiftStarted || playerCamera == null || entranceGuide != null && entranceGuide.IsPlaying) { if (uniformBoard != null) uniformBoard.Hide(); return; }
         if (uniformBoard == null) uniformBoard = new WorldPanel(gameObject, "Uniform_PreparationChecklist", 580f, 350f, 0.0018f);
-        Vector3 anchor = shirtSign != null ? shirtSign.position : shirt != null ? shirt.transform.position : transform.position;
-        anchor = new Vector3(anchor.x - 1.55f, 1.95f, anchor.z + 0.25f);
-        uniformBoard.Pose(anchor, playerCamera); uniformBoard.Begin();
+        SpatialLayout.BeginContext(playerCamera, "uniform");
+        uniformBoard.PoseAdaptive(playerCamera, SpatialSlot.Primary); uniformBoard.Begin();
         uniformBoard.Text(new Rect(20f, 16f, 540f, 43f), "BEFORE YOUR SHIFT", 32, WorldPanel.Accent, TextAnchor.UpperLeft, true);
         uniformBoard.Check(new Rect(20f, 78f, 265f, 42f), "T-shirt on", ShirtWorn);
         uniformBoard.Check(new Rect(300f, 78f, 260f, 42f), "Apron on", ApronWorn);

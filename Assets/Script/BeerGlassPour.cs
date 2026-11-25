@@ -222,6 +222,8 @@ public class BeerGlassPour : MonoBehaviour
     void LateUpdate()
     {
         DrawWorldUI();
+        worldAim.Tick(practice != null && practice.IsActive ? practice.ViewCamera : playerCamera,
+            practice != null && practice.IsActive && practice.IsPointingAtTarget);
         if (stationBeacon == null) return;
         if (uniform == null || !uniform.ShiftStarted
             || (barOpened && (night == null || (!night.HasBeerOrder && !night.HasCocktailOrder)))
@@ -238,7 +240,7 @@ public class BeerGlassPour : MonoBehaviour
             Vector3 approach = serviceMarker.transform.position;
             if (serviceDesk != null) approach.z = transform.position.z <= serviceDesk.bounds.center.z
                 ? serviceDesk.bounds.min.z - radius - 0.15f : serviceDesk.bounds.max.z + radius + 0.15f;
-            stationBeacon.Show(serviceMarker.transform.position + Vector3.up * 0.65f, playerCamera, "SERVE ORDER");
+            stationBeacon.Show(serviceMarker.transform.position + Vector3.up * 0.65f, playerCamera, "");
             stationBeacon.SetTrail(transform.position, approach, floorY);
             return;
         }
@@ -252,7 +254,7 @@ public class BeerGlassPour : MonoBehaviour
                 if (transform.position.z > bar.min.z - radius && transform.position.z < bar.max.z + radius)
                     approach = transform.position; // 카운터 옆 통로에서는 직선으로 가로지르는 경로를 그리지 않습니다.
             }
-            stationBeacon.Show(beerNozzle.position + Vector3.up * 0.42f, playerCamera, "BEER STATION");
+            stationBeacon.Show(beerNozzle.position + Vector3.up * 0.42f, playerCamera, "");
             stationBeacon.SetTrail(transform.position, approach, floorY);
             return;
         }
@@ -302,7 +304,7 @@ public class BeerGlassPour : MonoBehaviour
                 destination.x = transform.position.x; // 테이블 옆에서 접근할 때도 먼저 앞쪽 통로로 안내합니다.
             }
         }
-        stationBeacon.Show(marker, playerCamera, caption);
+        stationBeacon.Show(marker, playerCamera, barOpened ? "" : caption);
         stationBeacon.SetTrail(transform.position, destination, floorY);
     }
 
@@ -806,6 +808,7 @@ public class BeerGlassPour : MonoBehaviour
         if (cocktailBoard != null) cocktailBoard.Dispose();
         if (serveBoard != null) serveBoard.Dispose();
         worldAim.Dispose();
+        SpatialLayout.Release(playerCamera);
         if (stationBeacon != null) stationBeacon.Dispose();
         CancelBeerGuide();
         if (beerGuidance != null) beerGuidance.Dispose();
@@ -866,40 +869,50 @@ public class BeerGlassPour : MonoBehaviour
             if (cocktailBoard != null) cocktailBoard.Hide();
             if (serveBoard != null) serveBoard.Hide();
             if (night != null) night.HideUI();
-            practice.Draw(); worldAim.Tick(practice.ViewCamera, practice.IsPointingAtTarget); return;
+            if (cocktailEquipment != null) cocktailEquipment.HideUI(); if (recipeCards != null) recipeCards.HideUI();
+            practice.Draw(); return;
         }
-        worldAim.Tick(playerCamera);
-        DrawServingPlacard(uniform != null && uniform.ShiftStarted && (!barOpened ? !TaskCompleted : night != null && night.HasBeerOrder));
+        DrawServingPlacard(!barOpened && uniform != null && uniform.ShiftStarted && !TaskCompleted && heldGlass != null && filled[HeldGlassIndex()] && IsAimingAtServiceMarker());
         if (uniform == null || !uniform.ShiftStarted) return;
         if (barOpened && night != null)
         {
             if (beerBoard != null) beerBoard.Hide();
             if (cocktailBoard != null) cocktailBoard.Hide();
+            if (cocktailEquipment != null) cocktailEquipment.HideUI(); if (recipeCards != null) recipeCards.HideUI();
             night.Draw(); return;
         }
-        if (beerBoard == null) beerBoard = new WorldPanel(gameObject, "BeerStation_InstructionBoard", 760f, 380f, 0.0018f);
-        Vector3 beerPosition = beerNozzle != null ? beerNozzle.position + new Vector3(-1.3f, 0.65f, 0f)
-            : serviceDesk != null ? serviceDesk.bounds.center + Vector3.up * 1.7f : new Vector3(42.7f, 2.25f, 1.8f);
-        beerBoard.Pose(beerPosition, playerCamera); beerBoard.Begin();
-        beerBoard.Text(new Rect(24f, 19f, 712f, 45f), "BEER STATION", 35, WorldPanel.Accent, TextAnchor.UpperLeft, true);
-        beerBoard.Check(new Rect(24f, 80f, 350f, 42f), "Schooner served", served[0]);
-        beerBoard.Check(new Rect(395f, 80f, 340f, 42f), "Pint served", served[1]);
-        string guideHeading = pendingBeerInstruction == 0 ? "SCHOONER FIRST" : pendingBeerInstruction == 1 ? "WRONG GLASS"
-            : pendingBeerInstruction == 2 ? "NEXT: PINT" : "COCKTAIL STATION";
-        string instruction = uniform.IsGuidePlaying ? uniform.GuideMessage + "\nYou can move. Interact after the guide ends."
-            : IsGuidePlaying ? guideHeading + ". Listen to the guide. You can keep moving."
-            : TaskCompleted ? "Beer task complete. Walk around the bar to the cocktail recipe table."
-            : !beerIntroStarted ? "Come to the tap to hear your first instruction."
-            : pouring ? "Pouring beer..."
-            : heldGlass == null ? "Pick up the " + (ExpectedBeerGlass == 0 ? "schooner" : "pint") + " glass with LEFT CLICK."
-            : !filled[HeldGlassIndex()] ? "Aim at the beer tap and press E to pour." : "Place the filled glass on the glowing serving spot with LEFT CLICK.";
-        beerBoard.Text(new Rect(24f, 142f, 712f, 100f), instruction, 28);
-        string detail = Time.unscaledTime < actionUntil ? actionTitle + "\n" + actionDetail : prompt;
-        beerBoard.Text(new Rect(24f, 257f, 712f, 102f), detail, 24, WorldPanel.Accent); beerBoard.End();
+        if (recipeCards != null && recipeCards.IsOpen)
+        {
+            if (beerBoard != null) beerBoard.Hide(); if (cocktailBoard != null) cocktailBoard.Hide();
+            if (serveBoard != null) serveBoard.Hide(); if (cocktailEquipment != null) cocktailEquipment.HideUI();
+            SpatialLayout.BeginContext(playerCamera, "recipe-reading"); recipeCards.DrawOverlay(); return;
+        }
+        SpatialLayout.BeginContext(playerCamera, TaskCompleted ? "cocktail-training" : "beer-training");
+        if (!TaskCompleted)
+        {
+            if (beerBoard == null) beerBoard = new WorldPanel(gameObject, "BeerStation_InstructionBoard", 760f, 380f, 0.0018f);
+            beerBoard.PoseAdaptive(playerCamera, SpatialSlot.Primary); beerBoard.Begin();
+            beerBoard.Text(new Rect(24f, 19f, 712f, 45f), "BEER STATION", 35, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+            beerBoard.Check(new Rect(24f, 80f, 350f, 42f), "Schooner served", served[0]);
+            beerBoard.Check(new Rect(395f, 80f, 340f, 42f), "Pint served", served[1]);
+            string guideHeading = pendingBeerInstruction == 0 ? "SCHOONER FIRST" : pendingBeerInstruction == 1 ? "WRONG GLASS"
+                : pendingBeerInstruction == 2 ? "NEXT: PINT" : "COCKTAIL STATION";
+            string instruction = uniform.IsGuidePlaying ? uniform.GuideMessage + "\nYou can move. Interact after the guide ends."
+                : IsGuidePlaying ? guideHeading + ". Listen to the guide. You can keep moving."
+                : TaskCompleted ? "Beer task complete. Walk around the bar to the cocktail recipe table."
+                : !beerIntroStarted ? "Come to the tap to hear your first instruction."
+                : pouring ? "Pouring beer..."
+                : heldGlass == null ? "Pick up the " + (ExpectedBeerGlass == 0 ? "schooner" : "pint") + " glass with LEFT CLICK."
+                : !filled[HeldGlassIndex()] ? "Aim at the beer tap and press E to pour." : "Place the filled glass on the glowing serving spot with LEFT CLICK.";
+            beerBoard.Text(new Rect(24f, 142f, 712f, 100f), instruction, 28);
+            string detail = Time.unscaledTime < actionUntil ? actionTitle + "\n" + actionDetail : prompt;
+            beerBoard.Text(new Rect(24f, 257f, 712f, 102f), detail, 24, WorldPanel.Accent); beerBoard.End();
+        }
+        else if (beerBoard != null) beerBoard.Hide();
         if (TaskCompleted && recipeCards != null && recipeCards.TryGetFocusPoint(out Vector3 focus))
         {
             if (cocktailBoard == null) cocktailBoard = new WorldPanel(gameObject, "CocktailTable_TrainingRecord", 650f, 440f, 0.0018f);
-            cocktailBoard.PoseFixed(new Vector3(focus.x + 2f, 2.20f, focus.z + 0.48f), Quaternion.identity, playerCamera);
+            cocktailBoard.PoseAdaptive(playerCamera, SpatialSlot.Primary);
             cocktailBoard.Begin();
             cocktailBoard.Text(new Rect(20f, 16f, 610f, 42f), "COCKTAIL TRAINING", 31, WorldPanel.Accent, TextAnchor.UpperLeft, true);
             for (int recipe = 0; recipe < 3; recipe++)
@@ -1175,10 +1188,11 @@ public class BeerGlassPour : MonoBehaviour
             if (root == null) return;
             for (int index = 0; index < tools.Length; index++)
             {
-                if (tools[index] == null || held == index) { if (toolLabels[index] != null) toolLabels[index].Hide(); continue; }
+                if (tools[index] == null || held == index || Vector3.Distance(owner.playerCamera.transform.position, tools[index].transform.position) > 3f
+                    || Vector3.Angle(owner.playerCamera.transform.forward, tools[index].transform.position - owner.playerCamera.transform.position) > 40f) { if (toolLabels[index] != null) toolLabels[index].Hide(); continue; }
                 if (toolLabels[index] == null) toolLabels[index] = new WorldPanel(owner.gameObject, "CocktailTool_Label_" + index, 290f, 105f, 0.001f);
                 WorldPanel label = toolLabels[index];
-                label.PoseFixed(tools[index].transform.position + Vector3.up * (heights[index] + 0.10f), Quaternion.identity, owner.playerCamera);
+                label.Pose(tools[index].transform.position + Vector3.up * (heights[index] + 0.10f), owner.playerCamera);
                 label.Begin(); label.Text(new Rect(10f, 8f, 270f, 89f), names[index], 27, null, TextAnchor.MiddleCenter, true); label.End();
             }
         }
@@ -1539,7 +1553,6 @@ public class BeerGlassPour : MonoBehaviour
             BeginNightTransition(); ShuffleEncounters();
             owner.ResetServiceGlasses();
             if (owner.serviceMarker != null) owner.serviceMarker.SetActive(false);
-            CreateOpenSignStand();
             state = State.Waiting; deadline = Time.unscaledTime + 5f;
         }
 
@@ -1899,13 +1912,13 @@ public class BeerGlassPour : MonoBehaviour
 
         // Service notes live beside the customer in world space.
 
-        private WorldPanel statusBoard, decisionBoard, guideBoard, ticketBoard;
+        private WorldPanel statusBoard, decisionBoard, guideBoard;
         private void DrawEasyGuide()
         {
-            if (!easyGuideVisible || guest == null) { if (guideBoard != null) guideBoard.Hide(); return; }
+            if (!easyGuideVisible || guest == null || !(state == State.Screening || state == State.Leaving && Time.unscaledTime < deadline)) { if (guideBoard != null) guideBoard.Hide(); return; }
             if (guideBoard == null) guideBoard = new WorldPanel(owner.gameObject, "Customer_ServiceGuideCard", 340f, 410f, 0.00165f);
             // Customer-specific advice is clipped to a stand beside the guest, not to the player's view.
-            guideBoard.Pose(guest.transform.position + new Vector3(-0.98f, 1.58f, 0.25f), owner.playerCamera); guideBoard.Begin();
+            guideBoard.PoseAdaptive(owner.playerCamera, SpatialSlot.Secondary); guideBoard.Begin();
             bool age = kind == GuestKind.CheckID;
             guideBoard.Text(new Rect(18f, 16f, 304f, 28f), "EASY / SERVICE GUIDE", 23, WorldPanel.Accent, TextAnchor.UpperLeft, true);
             guideBoard.Text(new Rect(18f, 64f, 304f, 144f), age ? "This customer looks young. Check their ID before selling alcohol."
@@ -1914,17 +1927,23 @@ public class BeerGlassPour : MonoBehaviour
             guideBoard.Check(new Rect(18f, 315f, 304f, 70f), age ? "Refuse if under 18" : "Refuse alcohol service", guideRefusalComplete);
             guideBoard.End();
         }
-        public void DrawTicket(WorldPanel panel)
+        public void DrawTicket(WorldPanel panel, float remaining = -1f)
         {
             if (state != State.Preparing || order < 0) return;
             panel.Text(new Rect(20f, 18f, panel.Width - 40f, 35f), "ORDER #" + guestNumber.ToString("00"), 24, WorldPanel.Accent, TextAnchor.UpperLeft, true);
             panel.Text(new Rect(20f, 75f, panel.Width - 40f, 105f), orderNames[order], 32, WorldPanel.Ink, TextAnchor.UpperLeft, true);
+            if (remaining >= 0f)
+            {
+                panel.Text(new Rect(20f, 187f, panel.Width - 40f, 60f), remaining.ToString("0.0") + " s", 37, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
+                panel.Text(new Rect(20f, 260f, panel.Width - 40f, 100f), "45 seconds / one attempt\nMake the drink, then SERVE", 23);
+                return;
+            }
             panel.Text(new Rect(20f, 202f, panel.Width - 40f, panel.Height - 218f), order < 2
                 ? "Correct glass\nE at the tap\nLEFT CLICK to serve"
                 : "Cocktail station\n45 seconds / one attempt\nMake the drink, then SERVE", 24);
         }
         private int idChecks, ageRefusals, intoxicationRefusals, failedDrinkOrders, decisionErrors, unsafeSaleChoices;
-        private WorldPanel openSign, evaluationBoard;
+        private WorldPanel evaluationBoard;
         private ShiftEvaluation evaluation;
         private sealed class ShiftEvaluation
         {
@@ -1956,33 +1975,17 @@ public class BeerGlassPour : MonoBehaviour
                 "Review your evaluation sheet at the serving counter.", 5f);
             if (owner.sounds != null) owner.sounds.PlayResult(evaluation.Cleared);
         }
-        private void CreateOpenSignStand()
-        {
-            Bounds bar = owner.serviceDesk.bounds;
-            Part("OpenSign_Base", PrimitiveType.Cube, root.transform, new Vector3(bar.center.x, bar.max.y + 0.02f, bar.center.z), new Vector3(0.28f, 0.04f, 0.18f), dark);
-            float top = 1.94f;
-            Part("OpenSign_Post", PrimitiveType.Cube, root.transform, new Vector3(bar.center.x, (bar.max.y + top) * 0.5f, bar.center.z + 0.04f), new Vector3(0.035f, Mathf.Max(0.05f, top - bar.max.y), 0.035f), dark);
-        }
-        private void DrawOpenSign()
-        {
-            if (openSign == null) openSign = new WorldPanel(owner.gameObject, "Counter_PhysicalOpenSign", 620f, 200f, 0.0016f);
-            Bounds bar = owner.serviceDesk.bounds;
-            openSign.PoseFixed(new Vector3(bar.center.x, 2.10f, bar.center.z), Quaternion.Euler(0f, 180f, 0f), owner.playerCamera);
-            openSign.Begin();
-            openSign.Text(new Rect(18f, 15f, 584f, 88f), state == State.Completed ? "SHIFT FINISHED" : "OPEN", 49, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
-            openSign.Text(new Rect(18f, 123f, 584f, 57f), "LEVEL 1 / Week day (easy)", 28, null, TextAnchor.MiddleCenter);
-            openSign.End();
-        }
+
+
         private void DrawEvaluation()
         {
             if (evaluation == null) return;
             if (evaluationBoard == null)
             {
                 evaluationBoard = new WorldPanel(owner.gameObject, "Counter_ShiftEvaluationStand", 960f, 760f, 0.0018f);
-                Vector3 anchor = EvaluationPosition();
-                Part("EvaluationStand_Post", PrimitiveType.Cube, root.transform, new Vector3(anchor.x, 0.72f, anchor.z + 0.06f), new Vector3(0.045f, 1.44f, 0.045f), dark);
+
             }
-            evaluationBoard.PoseFixed(EvaluationPosition(), Quaternion.Euler(0f, 180f, 0f), owner.playerCamera);
+            evaluationBoard.PoseAdaptive(owner.playerCamera, SpatialSlot.Focus);
             evaluationBoard.Begin();
             Color resultColor = evaluation.Cleared ? WorldPanel.Accent : new Color(1f, 0.65f, 0.35f);
             evaluationBoard.Text(new Rect(24f, 16f, 912f, 45f), "WEEK DAY (EASY) / SHIFT COMPLETE", 34, null, TextAnchor.MiddleCenter, true);
@@ -2004,72 +2007,68 @@ public class BeerGlassPour : MonoBehaviour
             evaluationBoard.Progress(new Rect(24f, 733f, 912f, 7f), evaluation.Score / 100f);
             evaluationBoard.End();
         }
-        private Vector3 EvaluationPosition()
-        {
-            return new Vector3(owner.serviceMarker.transform.position.x, 2.10f, owner.serviceDesk.bounds.min.z - 0.60f);
-        }
 
-        public void Draw()
+
+                public void Draw()
         {
             if (disposed) return;
-            DrawOpenSign();
+            if (guestCaption != null) guestCaption.gameObject.SetActive(false); // The active card carries the response, without a duplicate head label.
             if (state == State.Completed)
             {
+                SpatialLayout.BeginContext(owner.playerCamera, "night-report");
                 if (statusBoard != null) statusBoard.Hide(); if (decisionBoard != null) decisionBoard.Hide();
-                if (ticketBoard != null) ticketBoard.Hide(); if (guideBoard != null) guideBoard.Hide();
+                if (guideBoard != null) guideBoard.Hide();
                 DrawEvaluation(); return;
             }
             if (evaluationBoard != null) evaluationBoard.Hide();
-            if (statusBoard == null) statusBoard = new WorldPanel(owner.gameObject, "NightService_ShiftBoard", 740f, 400f, 0.0019f);
-            statusBoard.PoseFixed(owner.serviceDesk.bounds.center + new Vector3(1.4f, 1.1f, 0f), Quaternion.Euler(0f, 180f, 0f), owner.playerCamera); statusBoard.Begin();
-            statusBoard.Text(new Rect(22f, 18f, 696f, 38f), "LEVEL 1 / Week day (easy)", 35, WorldPanel.Accent, TextAnchor.UpperLeft, true);
-            statusBoard.Text(new Rect(22f, 80f, 696f, 43f), "Customers: " + completedGuests + " / " + CustomerLimit + "   Served " + servedCount + "   Refused " + refusedCount + "   Missed " + missedCount, 25);
-            string message = state == State.Completed ? "LEVEL 1 COMPLETE\nAll 10 customers handled."
-                : state == State.Waiting ? "The bar is open. The next customer will arrive shortly."
-                : state == State.Arriving ? "A customer is approaching the counter."
-                : state == State.Screening ? "Talk to the customer and choose how to respond."
-                : HasCocktailOrder ? "Take the order to the cocktail table."
-                : HasBeerOrder ? "Correct glass > Pour with E > Serve with LEFT CLICK"
-                : state == State.Receiving ? "The customer is receiving the drink." : "Customer leaving.";
-            statusBoard.Text(new Rect(22f, 145f, 696f, 105f), message, 30, state == State.Completed ? WorldPanel.Accent : WorldPanel.Ink);
-            if (Time.unscaledTime < owner.actionUntil)
-                statusBoard.Text(new Rect(22f, 274f, 696f, 108f), owner.actionTitle + "\n" + owner.actionDetail, 24, WorldPanel.Accent);
-            if (Time.unscaledTime >= owner.actionUntil)
-                statusBoard.Text(new Rect(22f, 274f, 696f, 108f), owner.prompt, 26, WorldPanel.Accent);
-            statusBoard.End();
-            DrawEasyGuide();
-            if (state == State.Preparing && order >= 0)
+            SpatialLayout.BeginContext(owner.playerCamera, dialogOpen ? "night-decision" : "night-service");
+            if (dialogOpen && guest != null)
             {
-                if (ticketBoard == null) ticketBoard = new WorldPanel(owner.gameObject, "Bar_OrderTicketStand", 330f, 380f, 0.0018f);
-                ticketBoard.Pose(owner.serviceMarker.transform.position + new Vector3(-1.05f, 0.55f, 0.24f), owner.playerCamera);
-                ticketBoard.Begin(); DrawTicket(ticketBoard); ticketBoard.End();
+                if (statusBoard != null) statusBoard.Hide();
+                DrawEasyGuide();
+                if (decisionBoard == null) decisionBoard = new WorldPanel(owner.gameObject, "Customer_ServiceDecisionBoard", 760f, 400f, 0.0018f);
+                decisionBoard.PoseAdaptive(owner.playerCamera, SpatialSlot.Primary); decisionBoard.Begin();
+                decisionBoard.Text(new Rect(22f, 16f, 716f, 40f), "CUSTOMER / SERVICE DECISION", 31, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+                string detail = "I'd like a " + orderNames[order] + ", please.";
+                if (idChecked) detail += kind == GuestKind.CheckID ? "\nID RESULT: UNDER 18" : "\nID RESULT: 18 OR OVER";
+                decisionBoard.Text(new Rect(22f, 78f, 716f, 104f), detail, 27);
+                if (decisionBoard.Button(new Rect(20f, 210f, 226f, 82f), "SELL / TAKE ORDER")) { decisionBoard.End(); AcceptOrder(); decisionBoard.Hide(); return; }
+                if (decisionBoard.Button(new Rect(267f, 210f, 226f, 82f), idChecked ? "REFUSE / ID & AGE" : "ASK ID / AGE CHECK")) { decisionBoard.End(); RefuseService(true); return; }
+                if (decisionBoard.Button(new Rect(514f, 210f, 226f, 82f), "REFUSE / INTOXICATION")) { decisionBoard.End(); RefuseService(false); decisionBoard.Hide(); return; }
+                if (decisionBoard.Button(new Rect(20f, 320f, 720f, 58f), "CLOSE / ESC")) { decisionBoard.End(); CloseDialog(); decisionBoard.Hide(); return; }
+                decisionBoard.End(); return;
             }
-            else if (ticketBoard != null) ticketBoard.Hide();
-            if (!dialogOpen || guest == null) { if (decisionBoard != null) decisionBoard.Hide(); return; }
-            if (decisionBoard == null) decisionBoard = new WorldPanel(owner.gameObject, "Customer_ServiceDecisionBoard", 760f, 400f, 0.0018f);
-            decisionBoard.Pose(guest.transform.position + new Vector3(-0.10f, 2.25f, 1f), owner.playerCamera); decisionBoard.Begin();
-            decisionBoard.Text(new Rect(22f, 16f, 716f, 40f), "CUSTOMER / SERVICE DECISION", 31, WorldPanel.Accent, TextAnchor.UpperLeft, true);
-            string detail = "I'd like a " + orderNames[order] + ", please.";
-            if (idChecked) detail += kind == GuestKind.CheckID ? "\nID RESULT: UNDER 18" : "\nID RESULT: 18 OR OVER";
-            decisionBoard.Text(new Rect(22f, 78f, 716f, 104f), detail, 27);
-            if (decisionBoard.Button(new Rect(20f, 210f, 226f, 82f), "SELL / TAKE ORDER")) { AcceptOrder(); decisionBoard.End(); decisionBoard.Hide(); return; }
-            if (decisionBoard.Button(new Rect(267f, 210f, 226f, 82f), idChecked ? "REFUSE / ID & AGE" : "ASK ID / AGE CHECK")) { RefuseService(true); decisionBoard.End(); return; }
-            if (decisionBoard.Button(new Rect(514f, 210f, 226f, 82f), "REFUSE / INTOXICATION")) { RefuseService(false); decisionBoard.End(); decisionBoard.Hide(); return; }
-            if (decisionBoard.Button(new Rect(20f, 320f, 720f, 58f), "CLOSE / ESC")) CloseDialog();
-            decisionBoard.End();
+            if (decisionBoard != null) decisionBoard.Hide();
+            if (statusBoard == null) statusBoard = new WorldPanel(owner.gameObject, "NightService_ShiftBoard", 740f, 400f, 0.0019f);
+            statusBoard.PoseAdaptive(owner.playerCamera, SpatialSlot.Primary); statusBoard.Begin();
+            statusBoard.Text(new Rect(22f, 18f, 696f, 38f), "WEEK DAY (EASY) / " + completedGuests + " OF 10", 32, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+            string heading = state == State.Waiting ? "BAR OPEN" : state == State.Arriving ? "CUSTOMER ARRIVING"
+                : state == State.Screening ? "TALK TO THE CUSTOMER" : state == State.Preparing ? "ORDER #" + guestNumber.ToString("00") + " / " + orderNames[order]
+                : state == State.Receiving ? "ORDER SERVED" : "CUSTOMER LEAVING";
+            statusBoard.Text(new Rect(22f, 80f, 696f, 73f), heading, 32, null, TextAnchor.UpperLeft, true);
+            string message = state == State.Waiting ? "The next customer will arrive shortly."
+                : state == State.Arriving ? "Approach the counter and inspect the customer."
+                : state == State.Screening ? "Aim at the customer and LEFT CLICK to choose a response."
+                : HasCocktailOrder ? "Walk to the cocktail table.\n45 seconds / one attempt. Make the drink and SERVE."
+                : HasBeerOrder ? "Pick up the correct glass. E at the tap.\nLEFT CLICK the glowing serving spot."
+                : state == State.Receiving ? "The customer is receiving the drink." : "Wait for the next customer.";
+            if (Time.unscaledTime < owner.actionUntil && state != State.Preparing) message = owner.actionDetail;
+            statusBoard.Text(new Rect(22f, 171f, 696f, 119f), message, 27);
+            statusBoard.Text(new Rect(22f, 312f, 696f, 70f), !string.IsNullOrEmpty(owner.prompt) ? owner.prompt
+                : "Served " + servedCount + "   Refused " + refusedCount + "   Missed " + missedCount, 24, WorldPanel.Accent);
+            statusBoard.End(); DrawEasyGuide();
         }
+
         public void HideUI()
-        {
-            if (openSign != null) openSign.Hide(); if (evaluationBoard != null) evaluationBoard.Hide();
+        { if (evaluationBoard != null) evaluationBoard.Hide();
             if (statusBoard != null) statusBoard.Hide(); if (decisionBoard != null) decisionBoard.Hide();
-            if (guideBoard != null) guideBoard.Hide(); if (ticketBoard != null) ticketBoard.Hide();
+            if (guideBoard != null) guideBoard.Hide();
         }
 
         public void Dispose()
-        {
-        if (openSign != null) openSign.Dispose(); if (evaluationBoard != null) evaluationBoard.Dispose();
+        { if (evaluationBoard != null) evaluationBoard.Dispose();
         if (statusBoard != null) statusBoard.Dispose(); if (decisionBoard != null) decisionBoard.Dispose();
-        if (guideBoard != null) guideBoard.Dispose(); if (ticketBoard != null) ticketBoard.Dispose();
+        if (guideBoard != null) guideBoard.Dispose();
             if (disposed) return; disposed = true; CloseDialog();
             if (root != null) UnityEngine.Object.Destroy(root);
             foreach (Material material in materials) if (material != null) UnityEngine.Object.Destroy(material);
@@ -2209,6 +2208,8 @@ public class BeerGlassPour : MonoBehaviour
             root.layer = Layer;
             BuildScene();
             BuildStationFixtures();
+            // The practice furniture renders without colliders; give the spatial cards its render envelope.
+            SpatialLayout.SetPracticeGeometry(camera, new Bounds(origin + new Vector3(0f, 0.49f, 0.8f), new Vector3(4.6f, 0.98f, 1.9f)), origin.y + 0.03f);
             lookPitch = camera.transform.eulerAngles.x;
             if (lookPitch > 180f) lookPitch -= 360f;
             lookYaw = camera.transform.eulerAngles.y;
@@ -2765,11 +2766,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             // Rack labels keep their home position while the bottle/tool animates into the drink.
             foreach (int code in targets.Keys) labelAnchors[code] = targets[code].transform.position;
-            // Additive display furniture only. Part removes colliders; bottles/glasses/camera stay untouched.
-            for (int side = -1; side <= 1; side += 2)
-                Part("RecipeDisplay_Post", PrimitiveType.Cube, root.transform, new Vector3(side * 1.1f, 1.05f, 2.49f), new Vector3(0.035f, 2.1f, 0.035f), steel);
-            Part("TimerDisplay_Post", PrimitiveType.Cube, root.transform, new Vector3(-1.85f, 1f, 1.60f), new Vector3(0.035f, 2f, 0.035f), steel);
-            Part("MeasureDisplay_Post", PrimitiveType.Cube, root.transform, new Vector3(2.05f, 0.86f, 1.90f), new Vector3(0.035f, 1.72f, 0.035f), steel);
+
         }
         private void UpdateSelectionVisuals()
         {
@@ -2782,7 +2779,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             if (!pouring && Time.unscaledTime >= noticeUntil) { if (feedbackBoard != null) feedbackBoard.Hide(); return; }
             if (feedbackBoard == null) feedbackBoard = new WorldPanel(root, "Practice_ActionReceipt", 740f, 160f, 0.0024f, Layer);
-            feedbackBoard.PoseFixed(origin + new Vector3(0f, 1.86f, 2.43f), Quaternion.identity, camera); feedbackBoard.Begin();
+            feedbackBoard.PoseAdaptive(camera, SpatialSlot.Receipt); feedbackBoard.Begin();
             Color accent = pouring || noticeSuccess ? WorldPanel.Accent : new Color(1f, 0.65f, 0.30f);
             string title = pouring ? "POURING / " + (pourObject != null ? pourObject.name : "DRINK")
                 : (noticeCelebrate ? "GOOD JOB! " : "") + noticeTitle;
@@ -2847,6 +2844,8 @@ public class BeerGlassPour : MonoBehaviour
             }
             if (owner.sounds != null) owner.sounds.StopContinuous();
             hovered = -1;
+            foreach (var entry in targetBoards)
+                if (entry.Value.ContainsPointer(camera)) { hovered = entry.Key; break; }
             if (OverUI()) return;
 
             if (hovered < 0 && Physics.Raycast(camera.ScreenPointToRay(pointer), out RaycastHit hit, 8f,
@@ -2960,6 +2959,21 @@ public class BeerGlassPour : MonoBehaviour
                 default: return "ADD YOUR INGREDIENTS";
             }
         }
+        private string RecallIngredients()
+        {
+            string result = "";
+            foreach (int ingredient in recipeIngredients[recipe]) result += (result.Length == 0 ? "" : ", ") + ingredientNames[ingredient];
+            return result;
+        }
+        private string GuidedInstruction()
+        {
+            if (recipe == 2 && phase == Phase.TopUp) return "Lemon juice: 1 oz. Fill with cola.";
+            if (phase != Phase.Build) return NextInstruction();
+            if (recipe == 0) return "Gin: 1 oz. Fill with tonic water. Add ice.";
+            if (recipe == 1) return "1 oz each: sweet vermouth, gin and Campari. Add ice.";
+            return "Rum, gin, vodka and triple sec: 0.5 oz each. Add ice to the shaker.";
+        }
+
 
         private void Exit()
         {
@@ -2980,6 +2994,7 @@ public class BeerGlassPour : MonoBehaviour
         DisposeUI();
             if (released) return;
             released = true;
+            SpatialLayout.Release(camera);
             if (root != null) root.SetActive(false);
             if (scene.IsValid() && scene.isLoaded && Application.isPlaying) UnityEngine.SceneManagement.SceneManager.UnloadSceneAsync(scene);
             foreach (Material material in materials) if (material != null) UnityEngine.Object.Destroy(material);
@@ -3003,7 +3018,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             HideWorkUI();
             if (resultBoard == null) resultBoard = new WorldPanel(root, "Practice_BriefingAndResultsStand", 960f, 600f, 0.0018f, Layer);
-            resultBoard.PoseFixed(origin + new Vector3(0f, 1.60f, -0.10f), Quaternion.identity, camera); resultBoard.Begin();
+            resultBoard.PoseAdaptive(camera, SpatialSlot.Focus); resultBoard.Begin();
             string heading = awaitingStart ? "TRIAL " + (trial + 1) + " / " + trialNames[trial]
                 : failed ? serviceOrder ? "ORDER FAILED" : "TRY THIS TRIAL AGAIN"
                 : owner.AllTrialsComplete ? "ALL TRAINING COMPLETE" : "TRIAL " + (trial + 1) + " COMPLETE";
@@ -3046,34 +3061,45 @@ public class BeerGlassPour : MonoBehaviour
         public void Draw()
         {
             if (!IsActive) return;
-            if (awaitingStart || failed || completed) { DrawRoundBoard(); return; }
+            if (awaitingStart || failed || completed) { SpatialLayout.BeginContext(camera, "practice-menu"); DrawRoundBoard(); return; }
+            SpatialLayout.BeginContext(camera, "practice-work");
             if (resultBoard != null) resultBoard.Hide();
             UpdateSelectionVisuals();
-            if (clockBoard == null) clockBoard = new WorldPanel(root, "Practice_PhysicalTimer", 300f, 164f, 0.0018f, Layer);
-            clockBoard.PoseFixed(origin + new Vector3(-1.85f, 2.06f, 1.50f), Quaternion.identity, camera); clockBoard.Begin();
-            clockBoard.Text(new Rect(14f, 10f, 272f, 30f), "ROUND CLOCK", 22, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
-            clockBoard.Text(new Rect(14f, 49f, 272f, 64f), remaining.ToString("0.0") + " s", 49,
-                remaining <= 10f ? new Color(1f, 0.48f, 0.32f) : WorldPanel.Ink, TextAnchor.MiddleCenter, true);
-            clockBoard.Text(new Rect(14f, 121f, 272f, 32f), RoundSeconds.ToString("0") + " SECOND LIMIT", 21, WorldPanel.Ink, TextAnchor.MiddleCenter); clockBoard.End();
-            if (trial < 2 || serviceOrder)
+            if (serviceOrder && owner.night != null)
             {
-                if (workBoard == null) workBoard = new WorldPanel(root, "Practice_WorkbenchRecipeBoard", 960f, 245f, 0.0024f, Layer);
-                workBoard.PoseFixed(origin + new Vector3(0f, 2.42f, 2.43f), Quaternion.identity, camera); workBoard.Begin();
-                workBoard.Text(new Rect(22f, 14f, 916f, 45f), recipeNames[recipe] + (serviceOrder ? " / CUSTOMER ORDER" : " / TRIAL " + (trial + 1)), 35, WorldPanel.Accent, TextAnchor.UpperLeft, true);
-                string guidance = trial == 0 ? NextInstruction() : "Glass: " + glassNames[recipe] + ". Choose the correct ingredients; recall the amounts.";
-                workBoard.Text(new Rect(22f, 79f, 916f, 91f), pouring ? "Pouring into the vessel..." : guidance, 30);
-                workBoard.Text(new Rect(22f, 188f, 916f, 40f), hovered >= 0 && !toolHeld ? "IN FOCUS: " + TargetName(hovered) + " / LEFT CLICK TO USE"
-                    : "MOUSE: LOOK  |  LEFT CLICK: USE  |  R: JIGGER  |  ESC: LEAVE", 24);
-                if (pouring) workBoard.Progress(new Rect(22f, 236f, 916f, 5f), pourTime / 0.45f);
-                else if (trial == 0 || serviceOrder) workBoard.Progress(new Rect(22f, 236f, 916f, 5f), phase == Phase.Stir || phase == Phase.Shake
-                    ? strokes / 30f : (float)CompletedIngredientCount() / recipeIngredients[recipe].Length);
+                if (workBoard != null) workBoard.Hide(); if (clockBoard != null) clockBoard.Hide();
+            }
+            else if (trial < 2 || serviceOrder)
+            {
+                if (clockBoard != null) clockBoard.Hide();
+                if (workBoard == null) workBoard = new WorldPanel(root, "Practice_WorkbenchRecipeBoard", 860f, 240f, 0.0023f, Layer);
+                workBoard.PoseAdaptive(camera, SpatialSlot.Header); workBoard.Begin();
+                workBoard.Text(new Rect(20f, 12f, 620f, 44f), recipeNames[recipe], 31, WorldPanel.Accent, TextAnchor.UpperLeft, true);
+                string guidance = trial == 0 ? GuidedInstruction() : "Glass: " + glassNames[recipe] + ". Ingredients: " + RecallIngredients();
+                workBoard.Text(new Rect(20f, 72f, 620f, 95f), pouring ? "Pouring into the vessel..." : guidance, 25);
+                workBoard.Text(new Rect(664f, 14f, 176f, 31f), "TIME LEFT", 22, null, TextAnchor.MiddleCenter);
+                workBoard.Text(new Rect(664f, 51f, 176f, 58f), remaining.ToString("0.0") + " s", 37,
+                    remaining <= 10f ? new Color(1f, 0.48f, 0.32f) : WorldPanel.Accent, TextAnchor.MiddleCenter, true);
+                workBoard.Text(new Rect(664f, 123f, 176f, 43f), serviceOrder ? "LIVE ORDER" : "TRIAL " + (trial + 1), 22, null, TextAnchor.MiddleCenter);
+                workBoard.Text(new Rect(20f, 184f, 820f, 40f), hovered >= 0 && !toolHeld ? "IN FOCUS: " + TargetName(hovered) + " / LEFT CLICK"
+                    : "MOUSE: LOOK  |  LEFT CLICK: USE  |  R: JIGGER", 22);
+                if (pouring) workBoard.Progress(new Rect(20f, 231f, 820f, 5f), pourTime / 0.45f);
                 workBoard.End();
             }
-            else if (workBoard != null) workBoard.Hide();
+            else
+            {
+                if (workBoard != null) workBoard.Hide();
+                if (clockBoard == null) clockBoard = new WorldPanel(root, "Practice_PhysicalTimer", 300f, 164f, 0.0018f, Layer);
+                clockBoard.PoseAdaptive(camera, SpatialSlot.Timer); clockBoard.Begin();
+                clockBoard.Text(new Rect(14f, 10f, 272f, 30f), "ROUND CLOCK", 22, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
+                clockBoard.Text(new Rect(14f, 49f, 272f, 64f), remaining.ToString("0.0") + " s", 49,
+                    remaining <= 10f ? new Color(1f, 0.48f, 0.32f) : WorldPanel.Ink, TextAnchor.MiddleCenter, true);
+                clockBoard.Text(new Rect(14f, 121f, 272f, 32f), "RECALL TRIAL", 21, null, TextAnchor.MiddleCenter); clockBoard.End();
+            }
             if (trial < 2 || serviceOrder)
             {
                 if (controlsBoard == null) controlsBoard = new WorldPanel(root, "Practice_JiggerAndSubmissionStation", 440f, 310f, 0.0019f, Layer);
-                controlsBoard.PoseFixed(origin + new Vector3(2.05f, 2.00f, 1.80f), Quaternion.identity, camera); controlsBoard.Begin();
+                controlsBoard.PoseAdaptive(camera, SpatialSlot.Secondary); controlsBoard.Begin();
                 controlsBoard.Text(new Rect(16f, 12f, 408f, 32f), "JIGGER / R TO FLIP", 25, WorldPanel.Accent, TextAnchor.UpperLeft, true);
                 if (controlsBoard.Button(new Rect(16f, 58f, 196f, 59f), "0.5 oz", !pouring && !toolHeld, measure == 0.5f)) SetMeasure(0.5f);
                 if (controlsBoard.Button(new Rect(228f, 58f, 196f, 59f), "1 oz", !pouring && !toolHeld, measure == 1f)) SetMeasure(1f);
@@ -3088,11 +3114,11 @@ public class BeerGlassPour : MonoBehaviour
             else if (controlsBoard != null) controlsBoard.Hide();
             foreach (int code in targets.Keys)
             {
-                if (code == 32 || code == 33 || !(ShowTargetLabel(code) || code < 3 && selectedGlass == code)) { if (targetBoards.TryGetValue(code, out WorldPanel hidden)) hidden.Hide(); continue; }
+                if (pouring || Time.unscaledTime < noticeUntil || code == 32 || code == 33 || !((ShowTargetLabel(code) && (hovered == code || toolHeld && code == (phase == Phase.Stir ? 30 : 31))) || code < 3 && selectedGlass == code)) { if (targetBoards.TryGetValue(code, out WorldPanel hidden)) hidden.Hide(); continue; }
                 if (!targetBoards.TryGetValue(code, out WorldPanel label))
                 { label = new WorldPanel(root, "Practice_ObjectLabel_" + code, 360f, 176f, 0.00085f, Layer); targetBoards.Add(code, label); }
                 float offset = code >= 10 && code < 20 ? (code == 16 ? 0.25f : 0.60f) : code < 3 ? glassHeights[code] + 0.12f : code == 30 ? 0.46f : 0.45f;
-                label.PoseFixed(labelAnchors[code] + Vector3.up * offset, Quaternion.identity, camera); label.Begin();
+                label.Pose(labelAnchors[code] + Vector3.up * offset, camera); label.Begin();
                 bool clicked = label.Button(new Rect(4f, 4f, 352f, 168f), "", !pouring && !toolHeld && (code >= 3 || phase == Phase.ChooseGlass), code == selectedGlass || code == hovered);
                 label.Text(new Rect(14f, 10f, 332f, 94f), TargetName(code), 36, WorldPanel.Ink, TextAnchor.MiddleCenter, true);
                 label.Text(new Rect(14f, 116f, 332f, 48f), TargetStatus(code), 24, WorldPanel.Accent, TextAnchor.MiddleCenter);
@@ -3102,7 +3128,7 @@ public class BeerGlassPour : MonoBehaviour
             if (serviceOrder && owner.night != null)
             {
                 if (orderBoard == null) orderBoard = new WorldPanel(root, "Practice_PhysicalOrderTicket", 330f, 380f, 0.00165f, Layer);
-                orderBoard.PoseFixed(origin + new Vector3(-1.45f, 1.27f, 0.62f), Quaternion.identity, camera); orderBoard.Begin(); owner.night.DrawTicket(orderBoard); orderBoard.End();
+                orderBoard.PoseAdaptive(camera, SpatialSlot.Order); orderBoard.Begin(); owner.night.DrawTicket(orderBoard, remaining); orderBoard.End();
             }
             DrawActionReceipt();
         }
@@ -3326,8 +3352,7 @@ public class BeerGlassPour : MonoBehaviour
         {
             if (!IsOpen) { if (recipeBoard != null) recipeBoard.Hide(); return; }
             if (recipeBoard == null) recipeBoard = new WorldPanel(owner.gameObject, "CocktailRecipe_ReadingStand", 960f, 640f, 0.00175f);
-            Vector3 position = notes[1].transform.position; // One physical reading stand for all three pages.
-            recipeBoard.PoseFixed(new Vector3(position.x, 1.94f, position.z + 0.50f), Quaternion.identity, owner.playerCamera);
+            recipeBoard.PoseAdaptive(owner.playerCamera, SpatialSlot.Focus);
             recipeBoard.Begin();
             recipeBoard.Text(new Rect(24f, 17f, 730f, 45f), titles[selected], 39, WorldPanel.Accent, TextAnchor.UpperLeft, true);
             if (recipeBoard.Button(new Rect(800f, 16f, 136f, 48f), "CLOSE")) { Close(); recipeBoard.End(); return; }
@@ -3548,9 +3573,9 @@ internal sealed class WorldPanel : System.IDisposable
     private readonly System.Collections.Generic.List<UnityEngine.UI.Graphic> graphics = new System.Collections.Generic.List<UnityEngine.UI.Graphic>();
     private readonly Material frameMaterial;
     private static readonly System.Collections.Generic.List<WorldPanel> panels = new System.Collections.Generic.List<WorldPanel>();
-    private readonly float width, height;
+    private readonly float width, height, metresPerPixel;
     private int used, shownFrame = -1;
-    private bool hasButtons, disposed;
+    private bool hasButtons, disposed, adaptive;
     private Camera viewer;
     public float Width => width;
     public float Height => height;
@@ -3561,7 +3586,7 @@ internal sealed class WorldPanel : System.IDisposable
 
     public WorldPanel(GameObject owner, string name, float width, float height, float metresPerPixel = 0.002f, int layer = 2)
     {
-        this.width = width; this.height = height;
+        this.width = width; this.height = height; this.metresPerPixel = metresPerPixel;
         root = new GameObject(name, typeof(RectTransform), typeof(Canvas));
         root.layer = layer;
         UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(root, owner.scene);
@@ -3591,9 +3616,11 @@ internal sealed class WorldPanel : System.IDisposable
     public void Pose(Vector3 worldPosition, Camera camera)
     {
         if (disposed || root == null || camera == null) return;
+        adaptive = false;
         viewer = camera; root.GetComponent<Canvas>().worldCamera = camera;
+        root.transform.localScale = Vector3.one * metresPerPixel;
         root.transform.position = worldPosition;
-        Vector3 away = worldPosition - camera.transform.position; away.y = 0f;
+        Vector3 away = worldPosition - camera.transform.position;
         if (away.sqrMagnitude > 0.0001f)
         {
             Quaternion facing = Quaternion.LookRotation(away, Vector3.up);
@@ -3603,9 +3630,20 @@ internal sealed class WorldPanel : System.IDisposable
     public void PoseFixed(Vector3 worldPosition, Quaternion worldRotation, Camera camera)
     {
         if (disposed || root == null || camera == null) return;
+        adaptive = false;
         viewer = camera; root.GetComponent<Canvas>().worldCamera = camera;
+        root.transform.localScale = Vector3.one * metresPerPixel;
         root.transform.position = worldPosition; root.transform.rotation = worldRotation;
     }
+    public void PoseAdaptive(Camera camera, SpatialSlot slot)
+    {
+        if (disposed || camera == null) return;
+        Vector3 position = SpatialLayout.Position(camera, slot, out float factor);
+        Pose(position, camera); adaptive = true;
+        root.transform.localScale = Vector3.one * (metresPerPixel * factor);
+    }
+    public bool ContainsPointer(Camera camera) => HitVisible(camera, out Vector2 point, out float distance);
+
     public void Begin()
     {
         if (!Visible) shownFrame = Time.frameCount;
@@ -3697,6 +3735,12 @@ internal sealed class WorldPanel : System.IDisposable
             if (panel != this && panel.Hit(camera, out Vector2 otherPoint, out float otherDistance)
                 && otherDistance < distance - 0.002f) return false;
         return true;
+    }
+    public static bool PointerOverAdaptive(Camera camera)
+    {
+        foreach (WorldPanel panel in panels)
+            if (panel.adaptive && panel.HitVisible(camera, out Vector2 point, out float distance)) return true;
+        return false;
     }
     public static bool PointerOverInteractive(Camera camera)
     {
@@ -3804,4 +3848,127 @@ internal sealed class WorldAim : System.IDisposable
         if (material != null) UnityEngine.Object.Destroy(material);
         if (outlineMaterial != null) UnityEngine.Object.Destroy(outlineMaterial);
     }
+}
+
+// A shared, delayed world-space layout. It never parents cards to the camera or chases a pointed button.
+internal enum SpatialSlot { Primary, Secondary, Focus, Header, Timer, Receipt, Order }
+internal static class SpatialLayout
+{
+    private sealed class Frame
+    {
+        public string context;
+        public Vector3 eye;
+        public Quaternion heading;
+        public float awaySince = -1f, scale = 1f;
+        public int updated = -1;
+        public bool settling;
+        public Bounds? obstacle;
+        public float? floor;
+    }
+    private static readonly System.Collections.Generic.Dictionary<Camera, Frame> frames = new System.Collections.Generic.Dictionary<Camera, Frame>();
+    public static Vector3 Offset(SpatialSlot slot)
+    {
+        switch (slot)
+        {
+            case SpatialSlot.Primary: return new Vector3(-0.90f, -0.02f, 2.60f);
+            case SpatialSlot.Secondary: return new Vector3(1.70f, 0.65f, 2.60f);
+            case SpatialSlot.Header: return new Vector3(0f, 0.98f, 3.10f);
+            case SpatialSlot.Timer: return new Vector3(-1.60f, 0.98f, 3.10f);
+            case SpatialSlot.Receipt: return new Vector3(0f, 0.28f, 2.50f);
+            case SpatialSlot.Order: return new Vector3(-1.70f, 0.95f, 3.00f);
+            default: return new Vector3(0f, 0.50f, 2.70f);
+        }
+    }
+    public static void SetPracticeGeometry(Camera camera, Bounds obstacle, float floor)
+    {
+        if (!frames.TryGetValue(camera, out Frame frame)) { frame = new Frame(); frames.Add(camera, frame); }
+        frame.obstacle = obstacle; frame.floor = floor;
+    }
+    private static bool RenderHit(Ray ray, Bounds box, out float distance)
+    {
+        float near = 0f, far = 4f; Vector3 min = box.min, max = box.max;
+        for (int axis = 0; axis < 3; axis++)
+        {
+            float origin = axis == 0 ? ray.origin.x : axis == 1 ? ray.origin.y : ray.origin.z;
+            float direction = axis == 0 ? ray.direction.x : axis == 1 ? ray.direction.y : ray.direction.z;
+            float lo = axis == 0 ? min.x : axis == 1 ? min.y : min.z;
+            float hi = axis == 0 ? max.x : axis == 1 ? max.y : max.z;
+            if (Mathf.Abs(direction) < 0.00001f) { if (origin < lo || origin > hi) { distance = 0f; return false; } continue; }
+            float first = (lo - origin) / direction, second = (hi - origin) / direction;
+            near = Mathf.Max(near, Mathf.Min(first, second)); far = Mathf.Min(far, Mathf.Max(first, second));
+            if (near > far) { distance = 0f; return false; }
+        }
+        distance = near; return near > 0.05f && near <= 4f;
+    }
+    public static void BeginContext(Camera camera, string context)
+    {
+        if (camera == null) return;
+        if (!frames.TryGetValue(camera, out Frame frame)) { frame = new Frame(); frames.Add(camera, frame); }
+        if (frame.context != context)
+        {
+            frame.context = context; frame.eye = camera.transform.position;
+            frame.heading = Heading(camera); frame.awaySince = -1f; frame.settling = false; frame.updated = -1;
+        }
+        Tick(camera, frame);
+    }
+    private static Quaternion Heading(Camera camera)
+    {
+        Vector3 view = camera.transform.forward;
+        return Quaternion.LookRotation(view.sqrMagnitude > 0.001f ? view : Vector3.forward, Vector3.up);
+    }
+    private static void Tick(Camera camera, Frame frame)
+    {
+        if (frame.updated == Time.frameCount) return;
+        frame.updated = Time.frameCount;
+        Quaternion desired = Heading(camera);
+        bool pointing = WorldPanel.PointerOverInteractive(camera) || WorldPanel.PointerOverAdaptive(camera);
+        if (Vector3.Distance(frame.eye, camera.transform.position) > 0.35f)
+            frame.eye = Vector3.MoveTowards(frame.eye, camera.transform.position, Time.unscaledDeltaTime * 4f);
+        bool away = Vector3.Angle(frame.heading * Vector3.forward, camera.transform.forward) > 32f;
+        if (pointing)
+        {
+            frame.awaySince = -1f; frame.settling = false;
+            // Hold the reading angle; translation continues to follow sustained walking.
+        }
+        else if (away)
+        {
+            if (frame.awaySince < 0f) frame.awaySince = Time.unscaledTime;
+            if (Time.unscaledTime - frame.awaySince >= 0.35f) frame.settling = true;
+        }
+        else if (!frame.settling) frame.awaySince = -1f;
+        if (frame.settling && !pointing)
+        {
+            float step = Mathf.Min(Time.unscaledDeltaTime, 0.05f);
+            frame.heading = Quaternion.RotateTowards(frame.heading, desired, step * 110f);
+            if (Vector3.Angle(frame.heading * Vector3.forward, desired * Vector3.forward) < 2f)
+            { frame.settling = false; frame.awaySince = -1f; }
+        }
+        // Scale the whole layout together when a large scene surface is close, preserving its angular spacing.
+        float clearance = 3.25f;
+        Vector3 front = frame.heading * Vector3.forward, right = frame.heading * Vector3.right;
+        for (int side = -1; side <= 1; side++)
+        {
+            Vector3 direction = (front + right * (side * 0.8f)).normalized;
+            float projection = Mathf.Max(0.3f, Vector3.Dot(direction, front));
+            if (frame.obstacle.HasValue && RenderHit(new Ray(frame.eye, direction), frame.obstacle.Value, out float renderDistance))
+                clearance = Mathf.Min(clearance, Mathf.Max(0.26f, renderDistance - 0.12f) * projection);
+            if (frame.floor.HasValue && frame.eye.y > frame.floor.Value + 0.10f && direction.y < -0.001f)
+            {
+                float floorDistance = (frame.floor.Value - frame.eye.y) / direction.y;
+                clearance = Mathf.Min(clearance, Mathf.Max(0.26f, floorDistance - 0.12f) * projection);
+            }
+            if (!Physics.Raycast(new Ray(frame.eye, direction), out RaycastHit hit, 4f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore) || hit.collider == null) continue;
+            Vector3 size = hit.collider.bounds.size;
+            if (Mathf.Max(size.x, size.y, size.z) < 2f) continue;
+            clearance = Mathf.Min(clearance, Mathf.Max(0.26f, hit.distance - 0.12f) * Mathf.Max(0.3f, Vector3.Dot(direction, front)));
+        }
+        frame.scale = Mathf.Clamp(clearance / 3.25f, 0.08f, 1f);
+    }
+    public static Vector3 Position(Camera camera, SpatialSlot slot, out float scale)
+    {
+        if (!frames.TryGetValue(camera, out Frame frame)) { BeginContext(camera, "default"); frame = frames[camera]; }
+        Tick(camera, frame); scale = frame.scale;
+        return frame.eye + frame.heading * (Offset(slot) * scale);
+    }
+    public static void Release(Camera camera) { if (!ReferenceEquals(camera, null)) frames.Remove(camera); }
 }

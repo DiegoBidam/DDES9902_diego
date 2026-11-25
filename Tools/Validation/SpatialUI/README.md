@@ -1,6 +1,6 @@
-# Spatial UI source checks
+# Reactive spatial UI checks
 
-These checks use small Unity API substitutes. They do **not** compile against Unity assemblies, start Unity, render the game, run Unity physics, or certify a Web build / VR headset.
+These checks use small Unity API substitutes. They do **not** start Unity, compile against Unity assemblies, run Unity physics, render WebGL or certify headset comfort.
 
 With an already installed .NET SDK, run from the repository root:
 
@@ -8,19 +8,17 @@ With an already installed .NET SDK, run from the repository root:
 python3 Tools/Validation/SpatialUI/verify.py --dotnet /path/to/dotnet
 ```
 
-Nothing is installed or downloaded. Temporary test assemblies are removed. The checks cover:
+Nothing is installed or downloaded. Temporary test assemblies are removed. Both legacy-input and WebGL/Input System builds execute the same behavioral checks.
 
-- Changes confined to the five Mac-synced scripts; Inspector fields and embedded audio/art unchanged from the pre-conversion baseline.
-- No IMGUI, screen-space canvas modes or projected screen labels in Assets scripts.
-- Static 16:9 perspective projection of production workbench UI coordinates, checking viewport bounds and ingredient-label overlap.
-- C# compilation and execution of the same behavioral checks with legacy input and WebGL/new-input symbols, using API substitutes.
-- World-plane button hits, first-frame click protection, one action per frame, scene/nearer-panel occlusion, hidden/disabled/distant panels, head rotation leaving the sign in place, and graphic reuse.
-- Three recipes in all three trials, 90/60/45-second limits, unordered ingredients, 15 stir/shake round trips, completion checks, wrong ingredients and the 45-second customer timeout.
-- Third-round selection rings and receipts without recipe/quantity hints; rack labels staying in place while bottles animate.
-- Name/status text cells staying inside their boards, bounded font fitting and an enlarged outlined world pointer with click response.
-- Mouse-only free look during briefing, preparation and pouring; centre-ray selection and left-drag technique input without camera kick.
-- Fixed world positions/orientations for reading stands, the counter OPEN sign and the evaluation sheet, independent of head/viewer movement.
-- Ten-customer exit completion, separate serving/ID/intoxication/failure/unsafe-choice counters, immutable evaluation results and A/B/C/D grading including the safety override.
-- Recipe reading stands, customer service choices, easy guides, order tickets and shift completion UI states.
+Coverage includes:
 
-The substitute physics exposes an explicit blocking flag; those checks verify the caller's handling, not Unity's collision implementation. Verify real layouts, fonts, input, occlusion and all transitions on the Mac. Test files are outside Assets and are not included in Unity or the five-script Mac sync.
+- Mac-synced script scope, preserved Inspector fields and embedded media, and absence of screen-space UI / projected text.
+- World-plane button input, click guards, scene/card occlusion, graphical reuse, text cells, pointer contrast and mouse-only free look.
+- Shared spatial slots with a 0.35-second / 32-degree comfort zone, bounded recentering, viewer movement, hover stability, and common distance/scale adjustment near environment surfaces.
+- Rendering priorities: one opening/order card, decision plus optional easy note, one evaluation, and the live order note containing its own timer.
+- Recipe grading for all three trials; 90/60/45-second limits, 45-second live orders, 15 stir/shake round trips, and independent-trial confirmations without recipe hints.
+- Ten-customer completion and evaluation snapshots, correct ID/intoxication refusals, failures, accuracy grades and the unsafe-sale override.
+
+`geometry.py` reads real card dimensions and slot coordinates from the production code. It projects the complete frame quadrilaterals across 30 nearby eye/view poses and tests polygon separation, rather than comparing axis-aligned bounding boxes of tilted cards.
+
+Substitute physics uses controlled test hits. It verifies handling of occlusion/clearance, not Unity's collision implementation. Test files remain outside Assets and are not shipped by the five-script Mac sync. Verify actual layout, motion comfort, fonts, input and WebGL on the Mac.

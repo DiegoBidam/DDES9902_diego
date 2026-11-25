@@ -29,11 +29,6 @@ public class BarIntro : MonoBehaviour
     void Awake()
     {
         uiCamera = GetComponentInChildren<Camera>();
-        if (uiCamera != null)
-        {
-            Vector3 forward = uiCamera.transform.forward; forward.y = 0f;
-            introAnchor = uiCamera.transform.position + forward.normalized * 2.1f;
-        }
         movement = GetComponent<BarPlayerMovement>();
         uniform = GetComponent<UniformInteraction>();
         voiceSource = GetComponent<AudioSource>();
@@ -386,15 +381,15 @@ public class BarIntro : MonoBehaviour
 
     private WorldPanel introBoard;
     private Camera uiCamera;
-    private Vector3 introAnchor;
     void LateUpdate()
     {
         if (finished) { if (introBoard != null) introBoard.Hide(); return; }
         if (uiCamera == null) return;
         if (introBoard == null) introBoard = new WorldPanel(gameObject, "Entrance_WelcomeSign", 820f, 470f, 0.002f);
-        introBoard.Pose(introAnchor, uiCamera); introBoard.Begin();
+        SpatialLayout.BeginContext(uiCamera, "intro");
+        introBoard.PoseAdaptive(uiCamera, SpatialSlot.Focus); introBoard.Begin();
         introBoard.Text(new Rect(24f, 24f, 772f, 88f), "HOW TO BE A BARTENDER", 43, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
-        introBoard.Text(new Rect(24f, 126f, 772f, 80f), started ? "Welcome to your first shift! Head inside the bar." : "Look around freely. This sign stays at the entrance.", 29, null, TextAnchor.MiddleCenter);
+        introBoard.Text(new Rect(24f, 126f, 772f, 80f), started ? "Welcome to your first shift! Head inside the bar." : "Look around freely. The guide settles in view when you turn away.", 29, null, TextAnchor.MiddleCenter);
         // Enter starts the game; clicking to capture the WebGL pointer never starts it accidentally.
         introBoard.Fill(new Rect(90f, 227f, 640f, 110f), new Color(0.13f, 0.34f, 0.25f));
         introBoard.Text(new Rect(90f, 227f, 640f, 110f), started ? "LISTEN TO THE GUIDE" : "START / PRESS ENTER", 39, null, TextAnchor.MiddleCenter, true);
