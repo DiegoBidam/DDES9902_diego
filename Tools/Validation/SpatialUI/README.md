@@ -16,6 +16,8 @@ Nothing is installed or downloaded. Temporary test assemblies are removed. The c
 - C# source compilation with legacy input and WebGL/new-input symbols, using API substitutes.
 - World-plane button hits, first-frame click protection, one action per frame, scene/nearer-panel occlusion, hidden/disabled/distant panels, head rotation leaving the sign in place, and graphic reuse.
 - Three recipes in all three trials, 90/60/45-second limits, unordered ingredients, 15 stir/shake round trips, completion checks, wrong ingredients and the 45-second customer timeout.
+- Third-round selection rings and receipts without recipe/quantity hints; rack labels staying in place while bottles animate.
+- Name/status text cells staying inside their boards, bounded font fitting and an enlarged outlined world pointer with click response.
 - Recipe reading stands, customer service choices, easy guides, order tickets and shift completion UI states.
 
 The substitute physics exposes an explicit blocking flag; those checks verify the caller's handling, not Unity's collision implementation. Verify real layouts, fonts, input, occlusion and all transitions on the Mac. Test files are outside Assets and are not included in Unity or the five-script Mac sync.

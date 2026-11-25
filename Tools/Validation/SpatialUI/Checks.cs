@@ -21,6 +21,19 @@ static class Validation {
   board.Hide();Check(!WorldPanel.TryPointerHit(cam,out tip),"Hidden board does not capture rays");board.Dispose();
   var far=Board(owner,cam,"Far",7);far.Begin();far.Button(rect,"Too far");far.End();Time.frameCount++;Check(!WorldPanel.PointerOverInteractive(cam),"Interaction distance limited");far.Dispose();
  }
+ static void LabelCells(object practice){
+  foreach(WorldPanel board in ((IDictionary)Get(practice,"targetBoards")).Values){
+   UnityEngine.UI.Text previous=null;
+   foreach(UnityEngine.UI.Graphic graphic in (IList)Get(board,"graphics")){
+    if(!(graphic is UnityEngine.UI.Text text)||!text.gameObject.activeSelf||string.IsNullOrEmpty(text.text))continue;
+    var cell=text.rectTransform;float top=-cell.anchoredPosition.y;
+    Check(cell.anchoredPosition.x>=0&&top>=0&&cell.anchoredPosition.x+cell.sizeDelta.x<=board.Width&&top+cell.sizeDelta.y<=board.Height,"Label text stays inside its world card");
+    Check(text.resizeTextForBestFit&&text.resizeTextMinSize>=18,"World text has bounded fitting for Web layouts");
+    if(previous!=null)Check(-previous.rectTransform.anchoredPosition.y+previous.rectTransform.sizeDelta.y<=top,"Name and selection status occupy separate rows");
+    previous=text;
+   }
+  }
+ }
  static object Practice(BeerGlassPour owner,int recipe,bool service=false){var t=typeof(BeerGlassPour).GetNestedType("CocktailPractice",BindingFlags.NonPublic);return Activator.CreateInstance(t,BindingFlags.Public|BindingFlags.Instance,null,new object[]{owner,recipe,service},null);}
  static void PracticeUIAndRules(){
   Input.Click=false;var go=new GameObject("Player");var owner=go.AddComponent<BeerGlassPour>();var uniform=go.AddComponent<UniformInteraction>();Set(owner,"uniform",uniform);owner.playerCamera=new GameObject("Main").AddComponent<Camera>();owner.playerCamera.enabled=true;
@@ -28,13 +41,29 @@ static class Validation {
   for(int recipe=0;recipe<3;recipe++)for(int trial=0;trial<3;trial++){
    passed[recipe]=trial;Time.frameCount++;var p=Practice(owner,recipe);Check((float)p.GetType().GetProperty("RoundSeconds",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(p)==(trial==0?90:trial==1?60:45),"Trial timer preserved");
    Call(p,"Draw");Check(Get(p,"resultBoard")!=null,"Intro uses physical result board");Set(p,"awaitingStart",false);Time.frameCount++;Call(p,"Draw");
-   Check(Get(p,"clockBoard")!=null,"Physical timer exists in all rounds");
+   Check(Get(p,"clockBoard")!=null,"Physical timer exists in all rounds");LabelCells(p);
+   if(trial==0){
+    var bottles=(IDictionary)Get(p,"targets");var labels=(IDictionary)Get(p,"targetBoards");var bottle=(GameObject)bottles[10];
+    var oldPosition=bottle.transform.position;var labelPosition=((GameObject)Get(labels[10],"root")).transform.position;
+    bottle.transform.position=oldPosition+Vector3.up;Call(p,"Draw");
+    Check(((GameObject)Get(labels[10],"root")).transform.position==labelPosition,"Pour animation does not drag the name card across other labels");bottle.transform.position=oldPosition;
+   }
    if(trial==2)Check(Get(p,"workBoard")==null&&Get(p,"controlsBoard")==null&&((IDictionary)Get(p,"targetBoards")).Count==0,"Final round hides recipe and hint labels");
    Call(p,"SelectTarget",recipe);Check(!(bool)Get(p,"failed"),"Correct glass accepted");
+   Check(((GameObject[])Get(p,"rings"))[recipe].activeSelf,"Selected glass remains marked in every round");
+   if(trial==2){
+    Check((string)Get(p,"noticeTitle")=="GLASS SELECTED","Third round acknowledges glass selection");
+    Check(!((string)Get(p,"noticeDetail")).Contains("oz"),"Third-round confirmation has no quantities");Check((float)Get(p,"noticeUntil")-Time.unscaledTime>=3.2f,"Third-round acknowledgement remains readable");
+    Time.frameCount++;Call(p,"Draw");Check(((WorldPanel)Get(p,"feedbackBoard")).Visible,"Third-round receipt is visible");
+    LabelCells(p);Check(((IDictionary)Get(p,"targetBoards")).Count==1,"Only the already-selected glass gets a third-round label");
+    Check((string)Call(p,"TargetStatus",recipe)=="SELECTED","Third-round selected label is explicit");
+   }
    if(recipe==0){Call(p,"AddIngredient",6);Call(p,"AddIngredient",5);Call(p,"StopPour",true);Call(p,"AddIngredient",1);Call(p,"StopPour",true);}
    if(recipe==1){foreach(int ingredient in new[]{6,4,1,9}){Call(p,"AddIngredient",ingredient);Call(p,"StopPour",true);}Call(p,"SelectTarget",30);for(int i=0;i<30;i++)Call(p,"CountMotion",i%2==0?100f:-100f);Check((bool)Get(p,"stirred"),"15 stir round trips completes");}
    if(recipe==2){Call(p,"SetMeasure",.5f);foreach(int ingredient in new[]{3,2,1,0}){Call(p,"AddIngredient",ingredient);Call(p,"StopPour",true);}Call(p,"AddIngredient",6);Call(p,"SelectTarget",31);for(int i=0;i<30;i++)Call(p,"CountMotion",i%2==0?100f:-100f);Check((bool)Get(p,"shaken"),"15 shake round trips completes");Call(p,"AddIngredient",6);Call(p,"SelectTarget",31);Call(p,"StopPour",true);Call(p,"SetMeasure",1f);Call(p,"AddIngredient",8);Call(p,"StopPour",true);Call(p,"AddIngredient",7);Call(p,"StopPour",true);}
-   Check(!(bool)Get(p,"failed"),"Unordered valid recipe accepted");Time.frameCount++;Call(p,"Draw");Call(p,"TryFinish");Check((bool)Get(p,"completed"),"Correct cocktail completes");Check(passed[recipe]>=trial+1,"Trial completion persists");Time.frameCount++;Call(p,"Draw");Call(p,"Dispose");
+   Check(!(bool)Get(p,"failed"),"Unordered valid recipe accepted");
+   if(trial==2){Check(Time.unscaledTime<(float)Get(p,"noticeUntil"),"Third-round pour/technique completion gets confirmation");Check(!((string)Get(p,"noticeDetail")).Contains("oz")&&!((string)Get(p,"noticeDetail")).Contains("Click"),"Recall feedback does not reveal next step");}
+   Time.frameCount++;Call(p,"Draw");Call(p,"TryFinish");Check((bool)Get(p,"completed"),"Correct cocktail completes");Check(passed[recipe]>=trial+1,"Trial completion persists");Time.frameCount++;Call(p,"Draw");Call(p,"Dispose");
   }
   var bad=Practice(owner,0);Set(bad,"awaitingStart",false);Call(bad,"SelectTarget",0);Call(bad,"AddIngredient",4);Check((bool)Get(bad,"failed"),"Wrong recipe still fails");Call(bad,"Draw");Call(bad,"Dispose");
   var order=Practice(owner,1,true);Check((float)order.GetType().GetProperty("RoundSeconds",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(order)==45,"Live order remains 45 seconds");Call(order,"Draw");Set(order,"remaining",0f);Call(order,"Tick");Check((bool)Get(order,"failed"),"Live order timeout still fails");Call(order,"Draw");Call(order,"Dispose");
@@ -55,5 +84,15 @@ static class Validation {
   Call(cards,"Close");Check(!((WorldPanel)Get(cards,"recipeBoard")).Visible,"Closed card releases world panel");Set(uniform,"shiftStarted",true);Set(owner,"night",null);Call(owner,"DrawWorldUI");Check(((WorldPanel)Get(owner,"beerBoard")).Visible,"Beer status uses a world placard");var served=(bool[])Get(owner,"served");served[0]=served[1]=true;Call(owner,"DrawWorldUI");Check(((WorldPanel)Get(owner,"cocktailBoard")).Visible,"Training progress uses world checklist");
   Call(cards,"Dispose");Call(owner,"OnDestroy");
  }
- public static void Main(){SpatialButtons();PracticeUIAndRules();StationAndCustomerBoards();Console.WriteLine("PASS "+checks+" spatial input, UI state and recipe checks with Unity API shims; no Unity rendering or physics executed.");}
+ static void PointerVisibility(){
+  var cam=new GameObject("PointerCamera").AddComponent<Camera>();cam.enabled=true;cam.transform.position=new Vector3(0,1.7f,0);Cursor.lockState=CursorLockMode.Locked;Input.Click=false;
+  var owner=new GameObject("PointerOwner");var panel=Board(owner,cam,"PointerTarget",2);Time.frameCount++;panel.Begin();panel.Button(new Rect(0,0,400,200),"Target");panel.End();
+  var pointer=new WorldAim();pointer.Tick(cam,true);var point=(GameObject)Get(pointer,"point");
+  Check(point.activeSelf&&point.transform.localScale.x>=.028f,"Pointer is larger than the old 9mm dot");
+  Check(Get(pointer,"outline")!=null,"Pointer has a contrast outline");
+  Check(point.transform.parent==null,"Pointer stays in world space");
+  var initialScale=point.transform.localScale.x;Input.Click=true;pointer.Tick(cam,true);Check(point.transform.localScale.x>initialScale,"Interactive click visibly pulses pointer");
+  panel.Hide();pointer.Tick(cam);Check(!point.activeSelf,"Pointer hidden without a surface hit");pointer.Dispose();panel.Dispose();Input.Click=false;
+ }
+ public static void Main(){SpatialButtons();PointerVisibility();PracticeUIAndRules();StationAndCustomerBoards();Console.WriteLine("PASS "+checks+" spatial input, UI state and recipe checks with Unity API shims; no Unity rendering or physics executed.");}
 }

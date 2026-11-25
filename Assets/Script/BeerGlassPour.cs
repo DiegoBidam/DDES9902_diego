@@ -866,7 +866,7 @@ public class BeerGlassPour : MonoBehaviour
             if (cocktailBoard != null) cocktailBoard.Hide();
             if (serveBoard != null) serveBoard.Hide();
             if (night != null) night.HideUI();
-            practice.Draw(); worldAim.Tick(practice.ViewCamera); return;
+            practice.Draw(); worldAim.Tick(practice.ViewCamera, practice.IsPointingAtTarget); return;
         }
         worldAim.Tick(playerCamera);
         DrawServingPlacard(uniform != null && uniform.ShiftStarted && (!barOpened ? !TaskCompleted : night != null && night.HasBeerOrder));
@@ -2037,7 +2037,7 @@ public class BeerGlassPour : MonoBehaviour
         private readonly string[] trialDescriptions = {
             "Full guidance: glass, ingredients, target amounts and technique cues.",
             "Glass and ingredient names only. Target amounts and technique hints are hidden.",
-            "Workbench and timer only. Prepare the drink from memory and press ENTER to finish."
+            "Recall the recipe without hints. Selection and action confirmations stay visible. Press ENTER to finish."
         };
         private readonly string[] recipeNames = { "Gin & Tonic", "Negroni", "Long Island Iced Tea" };
         private readonly string[] glassNames = { "Rocks glass", "Old-fashioned glass", "Long-drink glass" };
@@ -2108,6 +2108,7 @@ public class BeerGlassPour : MonoBehaviour
             root.transform.position = origin;
             root.layer = Layer;
             BuildScene();
+            BuildStationFixtures();
             lookPitch = camera.transform.eulerAngles.x;
             if (lookPitch > 180f) lookPitch -= 360f;
             lookYaw = camera.transform.eulerAngles.y;
@@ -2561,7 +2562,7 @@ public class BeerGlassPour : MonoBehaviour
             {
                 if (phase != Phase.ChooseGlass) return;
                 if (code != recipe) { Fail("Incorrect glass.\nChoose the " + glassNames[recipe] + " for " + recipeNames[recipe] + "."); return; }
-                selectedGlass = code; rings[code].SetActive(trial < 2); phase = Phase.Build;
+                selectedGlass = code; rings[code].SetActive(true); phase = Phase.Build;
                 Notify("CORRECT GLASS", glassNames[code] + " selected. Add your ingredients.", celebrate: true); return;
             }
             if (code == 32 || code == 33) { SetMeasure(code == 32 ? 1f : 0.5f); return; }
@@ -2644,15 +2645,55 @@ public class BeerGlassPour : MonoBehaviour
         private string TargetName(int code)
         {
             if (code < 3) return glassNames[code];
-            if (code < 20)
-            {
-                int ingredient = code - 10;
-                return (code - 9).ToString("00") + "  " + ingredientNames[ingredient] + "\n" + IngredientProgress(ingredient);
-            }
-            if (code == 30) return trial == 0 && phase == Phase.Stir && !toolHeld ? "STIRRING STICK\nCLICK TO PICK UP" : "Stirring stick";
+            if (code < 20) return ingredientNames[code - 10];
+            if (code == 30) return "Stirring stick";
             if (code == 32) return "Jigger: 1 oz";
             if (code == 33) return "Jigger: 0.5 oz";
             return "Shaker";
+        }
+        private string TargetStatus(int code)
+        {
+            if (code < 3) return selectedGlass == code ? "SELECTED" : "LEFT CLICK";
+            if (code >= 10 && code < 20)
+            {
+                if (pouring && pourObject == targets[code]) return "POURING";
+                return trial == 0 ? IngredientProgress(code - 10) : included[code - 10] ? "ADDED" : "LEFT CLICK";
+            }
+            return toolHeld ? "HELD" : "LEFT CLICK";
+        }
+        public bool IsPointingAtTarget => IsActive && !awaitingStart && !failed && !completed && !pouring && (hovered >= 0 || toolHeld);
+
+        private void BuildStationFixtures()
+        {
+            // Rack labels keep their home position while the bottle/tool animates into the drink.
+            foreach (int code in targets.Keys) labelAnchors[code] = targets[code].transform.position;
+            // Additive display furniture only. Part removes colliders; bottles/glasses/camera stay untouched.
+            for (int side = -1; side <= 1; side += 2)
+                Part("RecipeDisplay_Post", PrimitiveType.Cube, root.transform, new Vector3(side * 1.1f, 1.05f, 2.49f), new Vector3(0.035f, 2.1f, 0.035f), steel);
+            Part("TimerDisplay_Post", PrimitiveType.Cube, root.transform, new Vector3(-1.85f, 1f, 1.60f), new Vector3(0.035f, 2f, 0.035f), steel);
+            Part("MeasureDisplay_Post", PrimitiveType.Cube, root.transform, new Vector3(2.05f, 0.86f, 1.90f), new Vector3(0.035f, 1.72f, 0.035f), steel);
+        }
+        private void UpdateSelectionVisuals()
+        {
+            if (selectedGlass < 0) return;
+            GameObject selected = rings[selectedGlass]; selected.SetActive(true);
+            float glow = 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 3.5f);
+            selected.GetComponent<Renderer>().sharedMaterial.color = Color.Lerp(new Color(0.12f, 0.65f, 0.38f), new Color(0.62f, 1f, 0.72f), glow);
+        }
+        private void DrawActionReceipt()
+        {
+            if (!pouring && Time.unscaledTime >= noticeUntil) { if (feedbackBoard != null) feedbackBoard.Hide(); return; }
+            if (feedbackBoard == null) feedbackBoard = new WorldPanel(root, "Practice_ActionReceipt", 740f, 160f, 0.0024f, Layer);
+            feedbackBoard.Pose(origin + new Vector3(0f, 1.86f, 2.43f), camera); feedbackBoard.Begin();
+            Color accent = pouring || noticeSuccess ? WorldPanel.Accent : new Color(1f, 0.65f, 0.30f);
+            string title = pouring ? "POURING / " + (pourObject != null ? pourObject.name : "DRINK")
+                : (noticeCelebrate ? "GOOD JOB! " : "") + noticeTitle;
+            string detail = pouring ? "Adding to the vessel..." : noticeDetail;
+            feedbackBoard.Text(new Rect(20f, 12f, 700f, 47f), title, 31, accent, TextAnchor.UpperLeft, true);
+            feedbackBoard.Text(new Rect(20f, 67f, 700f, 70f), detail, 26);
+            float progress = pouring ? pourTime / 0.45f : 1f - Mathf.Clamp01((Time.unscaledTime - noticeStarted) / Mathf.Max(0.1f, noticeUntil - noticeStarted));
+            feedbackBoard.Progress(new Rect(20f, 146f, 700f, 6f), progress);
+            feedbackBoard.End();
         }
         public void Tick()
         {
@@ -2764,10 +2805,15 @@ public class BeerGlassPour : MonoBehaviour
 
         private void Notify(string title, string detail, float duration = 2.4f, bool success = true, bool celebrate = false)
         {
-            if (trial == 2) return;
-            noticeTitle = title; noticeDetail = trial == 0 ? detail : "Action complete.";
-            noticeStarted = Time.unscaledTime; noticeUntil = noticeStarted + duration;
-            noticeSuccess = success; noticeCelebrate = celebrate && success;
+            // Every round confirms performed actions; recall rounds never expose target quantities or next steps.
+            noticeTitle = trial == 2 && title == "CORRECT GLASS" ? "GLASS SELECTED" : title;
+            noticeDetail = trial == 0 || serviceOrder ? detail : title == "CORRECT GLASS"
+                ? glassNames[selectedGlass] + " is selected." : !success ? "No additional ingredient was added."
+                : title.EndsWith("ADDED") ? "Added to the vessel." : title.EndsWith("PICKED UP") ? "Tool selected."
+                : title == "MEASURE SET" ? "Jigger setting changed." : "Action completed.";
+            noticeStarted = Time.unscaledTime;
+            noticeUntil = noticeStarted + (trial == 2 ? Mathf.Max(3.2f, duration) : duration);
+            noticeSuccess = success; noticeCelebrate = celebrate && success && trial < 2;
         }
         private bool ShowTargetLabel(int code)
         {
@@ -2837,6 +2883,7 @@ public class BeerGlassPour : MonoBehaviour
         }
 
         private WorldPanel workBoard, controlsBoard, clockBoard, resultBoard, feedbackBoard, orderBoard;
+        private readonly System.Collections.Generic.Dictionary<int, Vector3> labelAnchors = new System.Collections.Generic.Dictionary<int, Vector3>();
         private readonly System.Collections.Generic.Dictionary<int, WorldPanel> targetBoards = new System.Collections.Generic.Dictionary<int, WorldPanel>();
         private float lookYaw, lookPitch;
         public Camera ViewCamera => camera;
@@ -2897,6 +2944,7 @@ public class BeerGlassPour : MonoBehaviour
             if (!IsActive) return;
             if (awaitingStart || failed || completed) { DrawRoundBoard(); return; }
             if (resultBoard != null) resultBoard.Hide();
+            UpdateSelectionVisuals();
             if (clockBoard == null) clockBoard = new WorldPanel(root, "Practice_PhysicalTimer", 300f, 164f, 0.0018f, Layer);
             clockBoard.Pose(origin + new Vector3(-1.85f, 2.06f, 1.50f), camera); clockBoard.Begin();
             clockBoard.Text(new Rect(14f, 10f, 272f, 30f), "ROUND CLOCK", 22, WorldPanel.Accent, TextAnchor.MiddleCenter, true);
@@ -2906,11 +2954,16 @@ public class BeerGlassPour : MonoBehaviour
             if (trial < 2 || serviceOrder)
             {
                 if (workBoard == null) workBoard = new WorldPanel(root, "Practice_WorkbenchRecipeBoard", 960f, 245f, 0.0024f, Layer);
-                workBoard.Pose(origin + new Vector3(0f, 2.38f, 2.43f), camera); workBoard.Begin();
+                workBoard.Pose(origin + new Vector3(0f, 2.42f, 2.43f), camera); workBoard.Begin();
                 workBoard.Text(new Rect(22f, 14f, 916f, 45f), recipeNames[recipe] + (serviceOrder ? " / CUSTOMER ORDER" : " / TRIAL " + (trial + 1)), 35, WorldPanel.Accent, TextAnchor.UpperLeft, true);
                 string guidance = trial == 0 ? NextInstruction() : "Glass: " + glassNames[recipe] + ". Choose the correct ingredients; recall the amounts.";
                 workBoard.Text(new Rect(22f, 79f, 916f, 91f), pouring ? "Pouring into the vessel..." : guidance, 30);
-                workBoard.Text(new Rect(22f, 188f, 916f, 40f), "LEFT CLICK to use  |  RIGHT CLICK + drag to look  |  ESC to leave", 24); workBoard.End();
+                workBoard.Text(new Rect(22f, 188f, 916f, 40f), hovered >= 0 && !toolHeld ? "IN FOCUS: " + TargetName(hovered) + " / LEFT CLICK TO USE"
+                    : "LEFT CLICK to use  |  RIGHT CLICK + drag to look  |  ESC to leave", 24);
+                if (pouring) workBoard.Progress(new Rect(22f, 236f, 916f, 5f), pourTime / 0.45f);
+                else if (trial == 0 || serviceOrder) workBoard.Progress(new Rect(22f, 236f, 916f, 5f), phase == Phase.Stir || phase == Phase.Shake
+                    ? strokes / 30f : (float)CompletedIngredientCount() / recipeIngredients[recipe].Length);
+                workBoard.End();
             }
             else if (workBoard != null) workBoard.Hide();
             if (trial < 2 || serviceOrder)
@@ -2931,28 +2984,23 @@ public class BeerGlassPour : MonoBehaviour
             else if (controlsBoard != null) controlsBoard.Hide();
             foreach (int code in targets.Keys)
             {
-                if (code == 32 || code == 33 || !ShowTargetLabel(code)) { if (targetBoards.TryGetValue(code, out WorldPanel hidden)) hidden.Hide(); continue; }
+                if (code == 32 || code == 33 || !(ShowTargetLabel(code) || code < 3 && selectedGlass == code)) { if (targetBoards.TryGetValue(code, out WorldPanel hidden)) hidden.Hide(); continue; }
                 if (!targetBoards.TryGetValue(code, out WorldPanel label))
-                { label = new WorldPanel(root, "Practice_ObjectLabel_" + code, 260f, 100f, 0.00105f, Layer); targetBoards.Add(code, label); }
+                { label = new WorldPanel(root, "Practice_ObjectLabel_" + code, 360f, 176f, 0.00085f, Layer); targetBoards.Add(code, label); }
                 float offset = code >= 10 && code < 20 ? (code == 16 ? 0.25f : 0.60f) : code < 3 ? glassHeights[code] + 0.12f : code == 30 ? 0.46f : 0.45f;
-                label.Pose(targets[code].transform.position + Vector3.up * offset, camera); label.Begin();
-                if (label.Button(new Rect(5f, 8f, 250f, 84f), TargetName(code), !pouring && !toolHeld)) { label.End(); SelectTarget(code); return; }
+                label.Pose(labelAnchors[code] + Vector3.up * offset, camera); label.Begin();
+                bool clicked = label.Button(new Rect(4f, 4f, 352f, 168f), "", !pouring && !toolHeld && (code >= 3 || phase == Phase.ChooseGlass), code == selectedGlass || code == hovered);
+                label.Text(new Rect(14f, 10f, 332f, 94f), TargetName(code), 36, WorldPanel.Ink, TextAnchor.MiddleCenter, true);
+                label.Text(new Rect(14f, 116f, 332f, 48f), TargetStatus(code), 24, WorldPanel.Accent, TextAnchor.MiddleCenter);
                 label.End();
+                if (clicked) { SelectTarget(code); return; }
             }
             if (serviceOrder && owner.night != null)
             {
                 if (orderBoard == null) orderBoard = new WorldPanel(root, "Practice_PhysicalOrderTicket", 330f, 380f, 0.00165f, Layer);
                 orderBoard.Pose(origin + new Vector3(-1.45f, 1.27f, 0.62f), camera); orderBoard.Begin(); owner.night.DrawTicket(orderBoard); orderBoard.End();
             }
-            if (Time.unscaledTime < noticeUntil && trial != 2)
-            {
-                if (feedbackBoard == null) feedbackBoard = new WorldPanel(root, "Practice_ActionReceipt", 650f, 160f, 0.0024f, Layer);
-                feedbackBoard.Pose(origin + new Vector3(0f, 1.81f, 2.43f), camera); feedbackBoard.Begin();
-                feedbackBoard.Text(new Rect(18f, 12f, 614f, 42f), (noticeCelebrate ? "GOOD JOB! " : "") + noticeTitle, 29,
-                    noticeSuccess ? WorldPanel.Accent : new Color(1f, 0.57f, 0.37f), TextAnchor.UpperLeft, true);
-                feedbackBoard.Text(new Rect(18f, 68f, 614f, 78f), noticeDetail, 25); feedbackBoard.End();
-            }
-            else if (feedbackBoard != null) feedbackBoard.Hide();
+            DrawActionReceipt();
         }
         public void HideUI() { HideWorkUI(); if (resultBoard != null) resultBoard.Hide(); }
 
@@ -3479,6 +3527,8 @@ internal sealed class WorldPanel : System.IDisposable
         label.fontSize = size; label.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
         label.alignment = alignment; label.color = color ?? Ink;
         label.horizontalOverflow = HorizontalWrapMode.Wrap; label.verticalOverflow = VerticalWrapMode.Truncate;
+        label.resizeTextForBestFit = true;
+        label.resizeTextMinSize = Mathf.Max(18, size - 4); label.resizeTextMaxSize = size;
         label.supportRichText = false; label.text = text ?? "";
     }
     public void Image(Rect rect, Texture image, Rect uv)
@@ -3586,29 +3636,59 @@ internal static class SpatialInput
 internal sealed class WorldAim : System.IDisposable
 {
     private GameObject point;
-    private Material material;
-    public void Tick(Camera camera)
+    private Material material, outlineMaterial;
+    private LineRenderer outline;
+    private float clickUntil;
+    public void Tick(Camera camera, bool actionTarget = false)
     {
-        if (camera == null || !camera.enabled) { if (point != null) point.SetActive(false); return; }
+        if (camera == null || !camera.enabled) { Hide(); return; }
         Ray ray = SpatialInput.Ray(camera); Vector3 target;
         bool hit = WorldPanel.TryPointerHit(camera, out target);
+        bool interactive = actionTarget || WorldPanel.PointerOverInteractive(camera);
         if (!hit && Physics.Raycast(ray, out RaycastHit surface, 6f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
         { target = surface.point; hit = true; }
         if (point == null)
         {
             Shader shader = Shader.Find("Universal Render Pipeline/Unlit"); if (shader == null) shader = Shader.Find("Unlit/Color");
             if (shader == null) return;
-            material = new Material(shader) { color = WorldPanel.Accent };
+            material = new Material(shader) { color = Color.white };
+            outlineMaterial = new Material(shader) { color = new Color(0.015f, 0.025f, 0.03f) };
             point = GameObject.CreatePrimitive(PrimitiveType.Sphere); point.name = "SpatialRayTip_Runtime";
             UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(point, camera.gameObject.scene);
             Collider collider = point.GetComponent<Collider>(); collider.enabled = false; UnityEngine.Object.Destroy(collider);
             point.GetComponent<Renderer>().sharedMaterial = material;
-            point.transform.localScale = Vector3.one * 0.009f;
+            GameObject ring = new GameObject("Pointer_ContrastRing"); ring.transform.SetParent(point.transform, false);
+            outline = ring.AddComponent<LineRenderer>(); outline.useWorldSpace = false; outline.loop = true; outline.positionCount = 32;
+            outline.sharedMaterial = outlineMaterial;
+            for (int index = 0; index < 32; index++)
+            {
+                float angle = index * Mathf.PI * 2f / 32f;
+                outline.SetPosition(index, new Vector3(Mathf.Cos(angle) * 0.64f, Mathf.Sin(angle) * 0.64f, 0f));
+            }
         }
-        point.layer = camera.gameObject.layer == 30 ? 30 : 2;
+        int layer = camera.gameObject.layer == 30 ? 30 : 2;
+        point.layer = layer; outline.gameObject.layer = layer;
         point.SetActive(hit);
-        if (hit) point.transform.position = target - ray.direction * 0.012f;
+        if (!hit) return;
+#if ENABLE_INPUT_SYSTEM
+        bool clicked = Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame;
+#else
+        bool clicked = Input.GetMouseButtonDown(0);
+#endif
+        if (interactive && clicked) clickUntil = Time.unscaledTime + 0.18f;
+        float diameter = Mathf.Clamp(Vector3.Distance(camera.transform.position, target) * 0.018f, 0.028f, 0.10f);
+        if (Time.unscaledTime < clickUntil) diameter *= 1.18f;
+        point.transform.localScale = Vector3.one * diameter;
+        point.transform.rotation = Quaternion.LookRotation(ray.direction);
+        point.transform.position = target - ray.direction * (diameter * 0.60f + 0.008f);
+        outline.startWidth = outline.endWidth = diameter * 0.12f;
+        material.color = interactive ? WorldPanel.Accent : Color.white;
     }
     public void Hide() { if (point != null) point.SetActive(false); }
-    public void Dispose() { if (point != null) UnityEngine.Object.Destroy(point); if (material != null) UnityEngine.Object.Destroy(material); }
+    public void Dispose()
+    {
+        if (point != null) UnityEngine.Object.Destroy(point);
+        if (material != null) UnityEngine.Object.Destroy(material);
+        if (outlineMaterial != null) UnityEngine.Object.Destroy(outlineMaterial);
+    }
 }
