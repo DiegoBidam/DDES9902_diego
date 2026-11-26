@@ -40,11 +40,14 @@ public static class BartenderWebBuild
             inventory.AppendLine(assembly.name + "\t" + assembly.outputPath);
         File.WriteAllText(diagnostics, inventory.ToString());
 
+        const string releaseTitle = "How to be a Bartender";
+        string savedTitle = PlayerSettings.productName;
         WebGLCompressionFormat savedCompression = PlayerSettings.WebGL.compressionFormat;
         bool savedFallback = PlayerSettings.WebGL.decompressionFallback;
         BuildReport report;
         try
         {
+            PlayerSettings.productName = releaseTitle;
             PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Disabled;
             PlayerSettings.WebGL.decompressionFallback = false;
             var options = new BuildPlayerOptions
@@ -59,6 +62,7 @@ public static class BartenderWebBuild
         }
         finally
         {
+            PlayerSettings.productName = savedTitle;
             PlayerSettings.WebGL.compressionFormat = savedCompression;
             PlayerSettings.WebGL.decompressionFallback = savedFallback;
         }
@@ -72,7 +76,7 @@ public static class BartenderWebBuild
             || Directory.GetFiles(build, "*.framework.js").Length == 0)
             throw new InvalidOperationException("Unity reported success, but the expected Web files are missing.");
         File.WriteAllText(Path.Combine(output, "A2-build-result.txt"),
-            "Result: Succeeded\nUnity: " + Application.unityVersion + "\nScene: " + scene
+            "Result: Succeeded\nProduct: " + releaseTitle + "\nUnity: " + Application.unityVersion + "\nScene: " + scene
             + "\nErrors: " + report.summary.totalErrors + "\nWarnings: " + report.summary.totalWarnings
             + "\nBytes: " + report.summary.totalSize + "\n");
         Debug.Log("A2_WEB_BUILD_SUCCEEDED: " + output);

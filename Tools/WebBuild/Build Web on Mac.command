@@ -5,8 +5,23 @@ if [ "$(uname -s)" != Darwin ]; then
     exit 1
 fi
 
+select_source_revision() {
+    local source_cache=$1 main_revision=$2 requested=${3:-} resolved
+    if [ -z "$requested" ]; then printf '%s\n' "$main_revision"; return 0; fi
+    if [ "${#requested}" != 40 ] || [[ "$requested" = *[!0-9a-f]* ]]; then
+        echo 'A2_WEB_SOURCE_REVISION은 40자리 Git 커밋이어야 합니다.' >&2
+        return 1
+    fi
+    if ! resolved=$(/usr/bin/git -C "$source_cache" rev-parse --verify "$requested^{commit}" 2>/dev/null) \
+        || ! /usr/bin/git -C "$source_cache" merge-base --is-ancestor "$resolved" "$main_revision"; then
+        echo '요청한 최종 버전이 가져온 main 이력에 없어 빌드를 중단했습니다. 다른 버전으로 대신 빌드하지 않습니다.' >&2
+        return 1
+    fi
+    printf '%s\n' "$resolved"
+}
+
 package_web_build() {
-    local run_directory=$1 desktop=${2:-"$HOME/Desktop"} built log manifest suffix destination zipfile stamp
+    local run_directory=$1 desktop=${2:-"$HOME/Desktop"} built log manifest suffix destination zipfile stamp source_revision unity_version
     local -a matches
     run_directory=$(cd "$run_directory" && pwd -P)
     built="$run_directory/Bartender_Web"
@@ -32,11 +47,25 @@ package_web_build() {
     destination=$(mktemp -d "$desktop/Bartender_Web_Fixed-$stamp.XXXXXX")
     zipfile="$destination.zip"
     /usr/bin/ditto "$built" "$destination"
+    if [ -s "$run_directory/build-info.txt" ]; then
+        source_revision=$(/usr/bin/awk '/^Source revision:/ {print $3; exit}' "$run_directory/build-info.txt")
+        unity_version=$(/usr/bin/awk '/^Unity:/ {print $2; exit}' "$run_directory/build-info.txt")
+        if [ "${#source_revision}" != 40 ] || [[ "$source_revision" = *[!0-9a-f]* ]]; then
+            echo '소스 버전 기록이 올바르지 않아 ZIP을 생성하지 않았습니다.'
+            return 1
+        fi
+        # Only public release identity is included. Original-project paths stay in local diagnostics.
+        printf 'Game source revision: %s\nUnity: %s\nTarget: WebGL Release\nScene: How to be a bartender\n' \
+            "$source_revision" "$unity_version" > "$destination/Bartender-release.txt"
+    fi
     (cd "$destination" && /usr/bin/zip -qr "$zipfile" . -x '*.DS_Store' '__MACOSX/*')
     /usr/bin/unzip -tq "$zipfile"
     /usr/bin/unzip -Z1 "$zipfile" | /usr/bin/grep -Fx 'index.html' >/dev/null
+    /usr/bin/shasum -a 256 "$zipfile" > "$zipfile.sha256"
     echo 'WEB BUILD SUCCEEDED'
+    if [ -n "${source_revision:-}" ]; then echo "게임 소스 버전: $source_revision"; fi
     echo "업로드할 ZIP: $zipfile"
+    echo "무결성 확인 파일 (업로드 불필요): $zipfile.sha256"
     echo "실제 Unity 빌드 로그: $log"
     /usr/bin/open -R "$zipfile"
 }
@@ -119,7 +148,9 @@ if [ ! -d "$cache" ]; then
     /usr/bin/git -C "$cache" config remote.origin.partialclonefilter blob:none
 fi
 /usr/bin/git -C "$cache" fetch --quiet --filter=blob:none --depth=64 origin refs/heads/main
-revision=$(/usr/bin/git -C "$cache" rev-parse FETCH_HEAD)
+tool_revision=$(/usr/bin/git -C "$cache" rev-parse FETCH_HEAD)
+revision=$(select_source_revision "$cache" "$tool_revision" "${A2_WEB_SOURCE_REVISION:-}")
+echo "빌드할 게임 소스 버전: $revision"
 /usr/bin/git -C "$cache" show "$revision:Tools/MacAutoSync/original-hashes.txt" > "$run/original-hashes.txt"
 files=("Bar intro.cs" "BarPlayerMovement.cs" "BeerGlassPour.cs" "EntranceGuide.cs" "UniformInteraction.cs")
 hash() { /usr/bin/shasum -a 256 "$1" | /usr/bin/awk '{print $1}'; }
@@ -144,8 +175,8 @@ for index in "${!files[@]}"; do
     /usr/bin/git -C "$cache" show "$revision:Assets/Script/$file" > "$staging/Assets/Script/$file"
 done
 mkdir -p "$staging/Assets/Editor"
-/usr/bin/git -C "$cache" show "$revision:Tools/WebBuild/BartenderWebBuild.cs" > "$staging/Assets/Editor/A2WebBuild.cs"
-printf 'Source revision: %s\nOriginal project: %s\nUnity: %s\n' "$revision" "$project" "$version" > "$run/build-info.txt"
+/usr/bin/git -C "$cache" show "$tool_revision:Tools/WebBuild/BartenderWebBuild.cs" > "$staging/Assets/Editor/A2WebBuild.cs"
+printf 'Source revision: %s\nBuild tool revision: %s\nOriginal project: %s\nUnity: %s\n' "$revision" "$tool_revision" "$project" "$version" > "$run/build-info.txt"
 /usr/bin/find "$staging/Assets" "$staging/Packages" -type f -iname '*nunit*.dll' -print > "$run/nunit-asset-inventory.txt"
 # 전역 Bee 캐시도 이 빌드 전용 경로로 분리합니다.
 export BEE_CACHE_DIRECTORY="$run/BeeCache"
